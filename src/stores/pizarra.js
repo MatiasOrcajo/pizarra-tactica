@@ -544,52 +544,48 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
   /**
    * Restaura las posiciones de jugadores a las formaciones elegidas
-   * actualmente, sin modificar nombres ni colores de equipo.
+   * actualmente, conservando nombres y números de camiseta existentes.
    *
    * @param {boolean} clearAll — si es true, también elimina todas las
    *   anotaciones dibujadas (flechas, zonas, líneas, texto, etc.).
    *   Si es false, solo reposiciona jugadores y balón.
    */
   function resetToSelectedFormations(clearAll = false) {
-    if (clearAll) {
-      recordHistory()
-      nextId = 0
-      const team1Players = generateTeamPlayers(1, teams.team1, nextId)
-      nextId += team1Players.length
-      const team2Players = generateTeamPlayers(2, teams.team2, nextId)
-      nextId += team2Players.length
-      elements.value = [...team1Players, ...team2Players, createBall(nextId++)]
-      selectedElementId.value = null
-    } else {
-      beginHistoryBatch()
-      // Reposicionar jugadores de ambos equipos a sus formaciones actuales
-      ;[1, 2].forEach((teamId) => {
-        const key = teamId === 1 ? 'team1' : 'team2'
-        const positions = FORMATIONS[teams[key].formation] || FORMATIONS['4-4-2']
-        const teamPlayers = elements.value
-          .filter((el) => el.type === 'player' && el.teamId === teamId)
-          .sort((a, b) => a.id - b.id)
-          .slice(0, 11)
+    beginHistoryBatch()
 
-        teamPlayers.forEach((player, i) => {
-          const pos = positions[i] || positions[0]
-          const position = positionForTeam(pos, teamId)
-          updateElement(player.id, {
-            x: position.x,
-            y: position.y,
-          })
+    if (clearAll) {
+      // Eliminar todas las anotaciones dibujadas, conservar solo jugadores y balón
+      elements.value = elements.value.filter((el) => el.type === 'player' || el.type === 'ball')
+    }
+
+    // Reposicionar jugadores de ambos equipos a sus formaciones actuales
+    // conservando nombres y números existentes
+    ;[1, 2].forEach((teamId) => {
+      const key = teamId === 1 ? 'team1' : 'team2'
+      const positions = FORMATIONS[teams[key].formation] || FORMATIONS['4-4-2']
+      const teamPlayers = elements.value
+        .filter((el) => el.type === 'player' && el.teamId === teamId)
+        .sort((a, b) => a.id - b.id)
+        .slice(0, 11)
+
+      teamPlayers.forEach((player, i) => {
+        const pos = positions[i] || positions[0]
+        const position = positionForTeam(pos, teamId)
+        updateElement(player.id, {
+          x: position.x,
+          y: position.y,
         })
       })
+    })
 
-      // Resetear posición del balón al centro si existe
-      const ball = elements.value.find((el) => el.type === 'ball')
-      if (ball) {
-        updateElement(ball.id, { x: CENTER_SPOT.x, y: CENTER_SPOT.y })
-      }
-
-      selectedElementId.value = null
-      endHistoryBatch()
+    // Resetear posición del balón al centro si existe
+    const ball = elements.value.find((el) => el.type === 'ball')
+    if (ball) {
+      updateElement(ball.id, { x: CENTER_SPOT.x, y: CENTER_SPOT.y })
     }
+
+    selectedElementId.value = null
+    endHistoryBatch()
   }
 
   // ======================
