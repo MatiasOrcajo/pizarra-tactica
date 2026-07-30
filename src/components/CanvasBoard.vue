@@ -1,5 +1,7 @@
 <template>
+  <!-- CANVAS: contenedor que Konva usa para montar el Stage imperativo. -->
   <div ref="containerRef" class="canvas-container"></div>
+  <!-- OVERLAY JUGADOR: editor HTML, sincronizado con la ficha seleccionada. -->
   <div v-if="selectedPlayer" class="player-popover" :style="playerPopoverStyle">
     <input
       :value="selectedPlayer.playerName || ''"
@@ -17,6 +19,7 @@
       @input="updateSelectedPlayerNumber"
     >
   </div>
+  <!-- OVERLAY DIBUJO: colores y eliminación del elemento gráfico seleccionado. -->
   <div v-if="selectedDrawing" class="color-popover" :style="colorPopoverStyle">
     <button
       v-for="color in PRESET_COLORS"
@@ -41,28 +44,42 @@
 </template>
 
 <script setup>
+/**
+ * CANVAS BOARD / KONVA
+ *
+ * Renderizador imperativo de la pizarra táctica. Pinia conserva el modelo de
+ * datos y este componente reconcilia sus elementos con nodos Konva duraderos.
+ * Palabras clave: CANVAS, KONVA, PINIA, RECONCILIACION, HIT-TEST, DRAG,
+ * COORDENADAS VIRTUALES, OVERLAY, JUGADORES, DIBUJOS.
+ */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Konva from 'konva'
 import { usePizarraStore } from '../stores/pizarra'
 import { useCanvasResize } from '../composables/useCanvasResize'
 import { useFootballPitch, VIRTUAL_H, VIRTUAL_W } from '../composables/useFootballPitch'
 
+// ESTADO: Pinia es la única fuente de verdad de elementos y selección.
 const store = usePizarraStore()
+// REFERENCIAS VUE: nodo HTML del canvas y ficha que mantiene abierto su editor.
 const containerRef = ref(null)
 const playerPopoverId = ref(null)
+// RESPONSIVE: dimensiones visibles y transformación al campo virtual 1050x680.
 const { width, height } = useCanvasResize(containerRef)
 const { scale, offsetX, offsetY, pitchMarkings } = useFootballPitch(width, height)
 
+/** SELECCION JUGADOR: solo muestra el editor cuando coincide selección y pulsación. */
 const selectedPlayer = computed(() => {
   const element = store.selectedElement
   return element?.type === 'player' && element.id === playerPopoverId.value ? element : null
 })
 
+/** SELECCION DIBUJO: expone la anotación activa para el selector de color. */
 const selectedDrawing = computed(() => {
   const element = store.selectedElement
   return element?.type !== 'player' ? element : null
 })
 
+/** OVERLAY JUGADOR: convierte la posición virtual de la ficha a píxeles HTML. */
 const playerPopoverStyle = computed(() => {
   if (!selectedPlayer.value) return {}
   return {
@@ -71,6 +88,7 @@ const playerPopoverStyle = computed(() => {
   }
 })
 
+/** OVERLAY DIBUJO: posiciona el menú cerca del centro o borde superior del dibujo. */
 const colorPopoverStyle = computed(() => {
   if (!selectedDrawing.value) return {}
   const element = selectedDrawing.value
@@ -84,6 +102,7 @@ const colorPopoverStyle = computed(() => {
   }
 })
 
+// CONSTANTES VISUALES Y GESTOS: colores del campo, tolerancia y herramientas de dibujo.
 const LINE_COLOR = '#ffffff'
 const LINE_WIDTH = 2
 const PITCH_GREEN = '#2e7d32'
@@ -91,6 +110,7 @@ const DRAW_THRESHOLD = 8
 const PRESET_COLORS = ['#ffffff', '#f1c40f', '#e74c3c', '#3498db', '#2ecc71', '#9b59b6']
 const SHAPE_TOOLS = ['arrow', 'line', 'zone', 'circle', 'text']
 
+// GRAFO KONVA: capas separadas para fondo, campo, elementos y controles temporales.
 let stage = null
 let backgroundLayer = null
 let pitchLayer = null
@@ -111,9 +131,10 @@ let draggedHandle = null
 let draggedDrawing = null
 let playerPointerDown = null
 
-// Cada elemento del store conserva su nodo Konva durante toda su vida.
+// RECONCILIACION: cada id del store conserva su nodo Konva durante toda su vida.
 const elementNodes = new Map()
 
+/** EQUIPOS: obtiene los colores actuales de una ficha, incluso si no pertenece a un equipo. */
 function getPlayerColors(el) {
   if (el.teamId === 1) {
     return store.teams.team1
@@ -124,14 +145,20 @@ function getPlayerColors(el) {
   return { primaryColor: el.color || '#e74c3c', secondaryColor: '#ffffff' }
 }
 
+/** SELECCION: comprueba si un elemento es el activo en Pinia. */
 function isSelected(el) {
   return store.selectedElementId === el.id
 }
 
+/** HERRAMIENTA LIBRE: permite seleccionar y arrastrar en vez de crear un dibujo. */
 function isFreeTool() {
   return store.selectedTool === 'free'
 }
 
+/**
+ * COORDENADAS: transforma un puntero de pantalla al espacio virtual fijo del
+ * campo. Nunca se persisten coordenadas dependientes del tamaño del viewport.
+ */
 function screenToVirtual(position) {
   return {
     x: (position.x - offsetX.value) / scale.value,
@@ -139,6 +166,7 @@ function screenToVirtual(position) {
   }
 }
 
+/** HIT-TEST KONVA: sube por el árbol de nodos hasta encontrar su elementId. */
 function elementIdFromNode(node) {
   let current = node
   while (current && current !== stage) {
@@ -163,6 +191,7 @@ function findPlayerAt(point) {
   return null
 }
 
+/** HIT-TEST GEOMETRICO: detecta si un punto está dentro de la tolerancia de un segmento. */
 function pointNearSegment(point, start, end) {
   const dx = end.x - start.x
   const dy = end.y - start.y
@@ -171,6 +200,7 @@ function pointNearSegment(point, start, end) {
   return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t)) <= 18
 }
 
+/** HIT-TEST FLECHA: aproxima curvas cuadráticas por segmentos para el respaldo manual. */
 function findArrowAt(point) {
   for (let index = store.elements.length - 1; index >= 0; index -= 1) {
     const element = store.elements[index]
@@ -193,6 +223,7 @@ function findArrowAt(point) {
   return null
 }
 
+/** HIT-TEST LINEA: encuentra la línea más reciente próxima al puntero. */
 function findLineAt(point) {
   for (let index = store.elements.length - 1; index >= 0; index -= 1) {
     const element = store.elements[index]
@@ -202,6 +233,7 @@ function findLineAt(point) {
   return null
 }
 
+/** HIT-TEST ZONA: comprueba si el puntero está dentro del rectángulo anotado. */
 function findZoneAt(point) {
   for (let index = store.elements.length - 1; index >= 0; index -= 1) {
     const element = store.elements[index]
@@ -215,6 +247,7 @@ function findZoneAt(point) {
   return null
 }
 
+/** HIT-TEST CIRCULO: comprueba la distancia del puntero a su centro. */
 function findCircleAt(point) {
   for (let index = store.elements.length - 1; index >= 0; index -= 1) {
     const element = store.elements[index]
@@ -223,22 +256,29 @@ function findCircleAt(point) {
   return null
 }
 
+/** SELECCION: delegación mínima para mantener los listeners Konva desacoplados del store. */
 function selectElement(id) {
   store.selectElement(id)
 }
 
+/** OVERLAY JUGADOR: persiste el nombre escrito en el editor HTML. */
 function updateSelectedPlayerName(event) {
   if (selectedPlayer.value) {
     store.updateElement(selectedPlayer.value.id, { playerName: event.target.value })
   }
 }
 
+/** OVERLAY JUGADOR: persiste el dorsal escrito en el editor HTML. */
 function updateSelectedPlayerNumber(event) {
   if (selectedPlayer.value) {
     store.updateElement(selectedPlayer.value.id, { playerNumber: event.target.value })
   }
 }
 
+/**
+ * DRAG JUGADOR: selecciona y arranca el drag nativo cuando el HIT-TEST manual
+ * detectó una ficha bajo otro dibujo y Konva entregó el evento al nodo incorrecto.
+ */
 function selectAndStartPlayerDrag(player, event) {
   if (!isFreeTool()) return
   playerPopoverId.value = null
@@ -253,6 +293,7 @@ function selectAndStartPlayerDrag(player, event) {
   group.startDrag(event)
 }
 
+/** DRAG DIBUJO: guarda una copia inicial para trasladar la anotación desde el Stage. */
 function startDrawingDrag(element, point, event) {
   if (!isFreeTool() || element.type === 'player') return
   playerPopoverId.value = null
@@ -261,6 +302,10 @@ function startDrawingDrag(element, point, event) {
   event.evt?.preventDefault?.()
 }
 
+/**
+ * DRAG DIBUJO: calcula el desplazamiento según el tipo. Las líneas se desligan
+ * de jugadores al moverlas manualmente para no volver a anclarse a sus centros.
+ */
 function drawingDragChanges(element, dx, dy) {
   if (element.type === 'arrow') {
     return {
@@ -287,6 +332,7 @@ function drawingDragChanges(element, dx, dy) {
   return { x: element.x + dx, y: element.y + dy }
 }
 
+/** EVENTOS KONVA: identifica el elemento y habilita su selección en herramienta libre. */
 function bindSelection(node, id) {
   node.setAttr('elementId', id)
   node.on('mousedown touchstart', () => {
@@ -294,6 +340,7 @@ function bindSelection(node, id) {
   })
 }
 
+/** RENDER JUGADOR: crea el grupo draggable con círculo, dorsal y nombre. */
 function createPlayer(el) {
   const group = new Konva.Group({ draggable: isFreeTool(), listening: true, elementId: el.id })
   const circle = new Konva.Circle()
@@ -313,6 +360,10 @@ function createPlayer(el) {
   return group
 }
 
+/**
+ * RENDER JUGADOR: actualiza apariencia y posición sin interrumpir un DRAG
+ * nativo que todavía no ha confirmado sus coordenadas en Pinia.
+ */
 function updatePlayer(group, el) {
   const colors = getPlayerColors(el)
   const selected = isSelected(el)
@@ -348,7 +399,7 @@ function updatePlayer(group, el) {
     y: 23,
     width: 120,
     text: el.playerName || '',
-    fontSize: 13,
+    fontSize: 20,
     fontStyle: 'bold',
     fill: '#ffffff',
     align: 'center',
@@ -356,6 +407,7 @@ function updatePlayer(group, el) {
   })
 }
 
+/** RENDER FLECHA: dibuja la trayectoria recta o curva y su punta con Canvas 2D. */
 function drawArrow(ctx, el) {
   const controlX = el.cx ?? (el.x + el.x2) / 2
   const controlY = el.cy ?? (el.y + el.y2) / 2
@@ -386,6 +438,7 @@ function drawArrow(ctx, el) {
   ctx.fill()
 }
 
+/** RENDER FLECHA: crea visual y área HIT-TEST independiente para una pulsación tolerante. */
 function createArrow(el) {
   const group = new Konva.Group()
   const visual = new Konva.Shape({ listening: false })
@@ -396,6 +449,7 @@ function createArrow(el) {
   return group
 }
 
+/** RENDER FLECHA: actualiza el dibujo visible y el hit graph imperativo de Konva. */
 function updateArrow(group, el) {
   const selected = isSelected(el)
   if (!group.isDragging()) group.position({ x: 0, y: 0 })
@@ -440,6 +494,7 @@ function updateArrow(group, el) {
   })
 }
 
+/** RENDER ZONA: crea el rectángulo seleccionable que representa una zona táctica. */
 function createZone(el) {
   const node = new Konva.Rect()
   bindSelection(node, el.id)
@@ -447,6 +502,7 @@ function createZone(el) {
   return node
 }
 
+/** RENDER ZONA: aplica dimensiones, color y realce de selección al rectángulo. */
 function updateZone(node, el) {
   const selected = isSelected(el)
   if (!node.isDragging()) node.position({ x: el.x, y: el.y })
@@ -463,6 +519,7 @@ function updateZone(node, el) {
   })
 }
 
+/** RENDER CIRCULO: crea el área circular seleccionable. */
 function createCircle(el) {
   const node = new Konva.Circle()
   bindSelection(node, el.id)
@@ -470,6 +527,7 @@ function createCircle(el) {
   return node
 }
 
+/** RENDER CIRCULO: aplica radio, estilo y realce de selección. */
 function updateCircle(node, el) {
   const selected = isSelected(el)
   if (!node.isDragging()) node.position({ x: el.x, y: el.y })
@@ -485,6 +543,7 @@ function updateCircle(node, el) {
   })
 }
 
+/** RENDER LINEA: crea una línea seleccionable que puede estar anclada a jugadores. */
 function createLine(el) {
   const node = new Konva.Line()
   bindSelection(node, el.id)
@@ -492,6 +551,7 @@ function createLine(el) {
   return node
 }
 
+/** RENDER LINEA: actualiza puntos, tolerancia de HIT-TEST y estilo de selección. */
 function updateLine(node, el) {
   const selected = isSelected(el)
   if (!node.isDragging()) node.position({ x: 0, y: 0 })
@@ -507,6 +567,7 @@ function updateLine(node, el) {
   })
 }
 
+/** RENDER TEXTO: crea la anotación textual seleccionable. */
 function createText(el) {
   const node = new Konva.Text()
   bindSelection(node, el.id)
@@ -514,6 +575,7 @@ function createText(el) {
   return node
 }
 
+/** RENDER TEXTO: actualiza contenido, tipografía, posición y realce de selección. */
 function updateText(node, el) {
   const selected = isSelected(el)
   if (!node.isDragging()) node.position({ x: el.x, y: el.y })
@@ -528,6 +590,7 @@ function updateText(node, el) {
   })
 }
 
+/** FACTORIA KONVA: construye el nodo correcto para cada tipo persistido en Pinia. */
 function createElement(el) {
   if (el.type === 'player') return createPlayer(el)
   if (el.type === 'arrow') return createArrow(el)
@@ -538,6 +601,7 @@ function createElement(el) {
   return null
 }
 
+/** DESPACHO RENDER: aplica la actualización específica al nodo Konva existente. */
 function updateElement(node, el) {
   if (el.type === 'player') updatePlayer(node, el)
   else if (el.type === 'arrow') updateArrow(node, el)
@@ -547,6 +611,10 @@ function updateElement(node, el) {
   else if (el.type === 'text') updateText(node, el)
 }
 
+/**
+ * RECONCILIACION: elimina nodos sin modelo, crea los nuevos y actualiza los
+ * existentes. Es el puente principal entre `store.elements` y Konva.
+ */
 function reconcileElements() {
   if (!elementLayer) return
   const currentIds = new Set(store.elements.map((el) => el.id))
@@ -573,6 +641,10 @@ function reconcileElements() {
   overlayLayer.batchDraw()
 }
 
+/**
+ * CONTROLES DE EDICION: define los tiradores virtuales para ajustar extremos,
+ * curvatura, esquinas de zonas y radio de círculos.
+ */
 function handleDefinitions(element) {
   if (element.type === 'arrow') {
     const middleX = element.cx ?? (element.x + element.x2) / 2
@@ -607,6 +679,7 @@ function handleDefinitions(element) {
   return []
 }
 
+/** DRAG TIRADOR: inicia edición si el puntero cae dentro de un control activo. */
 function startHandleDrag(point) {
   if (!isFreeTool()) return false
   const element = store.selectedElement
@@ -619,6 +692,7 @@ function startHandleDrag(point) {
   return true
 }
 
+/** RENDER CONTROLES: crea, elimina o reposiciona los tiradores del dibujo seleccionado. */
 function renderEditHandles() {
   const element = store.selectedElement
   const definitions = element ? handleDefinitions(element) : []
@@ -647,6 +721,7 @@ function renderEditHandles() {
   })
 }
 
+/** PREVISUALIZACION: elimina el nodo temporal de una herramienta de dibujo. */
 function clearPreview() {
   if (previewNode) {
     previewNode.destroy()
@@ -654,6 +729,7 @@ function clearPreview() {
   }
 }
 
+/** PREVISUALIZACION: crea y actualiza la guía temporal durante el gesto de dibujo. */
 function updatePreview() {
   if (!drawStart || !drawCurrent) return
   const tool = store.selectedTool
@@ -699,6 +775,10 @@ function updatePreview() {
   overlayLayer.batchDraw()
 }
 
+/**
+ * FINALIZAR DIBUJO: valida la distancia mínima, guarda una anotación en Pinia
+ * y vuelve a la herramienta libre. Las líneas detectan jugadores para anclarse.
+ */
 function finishDrawing() {
   if (!isDrawing || !drawStart || !drawCurrent) return
   isDrawing = false
@@ -734,6 +814,10 @@ function finishDrawing() {
 }
 
 function bindStageEvents() {
+  /**
+   * EVENTOS PUNTERO INICIO: prioriza herramientas de dibujo y, en modo libre,
+   * prioriza siempre JUGADORES sobre dibujos, zonas y tiradores superpuestos.
+   */
   stage.on('mousedown touchstart', (event) => {
     const position = stage.getPointerPosition()
     if (!position || !scale.value) return
@@ -761,8 +845,8 @@ function bindStageEvents() {
     const targetId = elementIdFromNode(event.target)
     const targetElement = store.elements.find((element) => element.id === targetId)
 
-    // Drawings can be the Konva hit target even when a player is visually
-    // inside them. Resolve players from the board model first in that case.
+    // PRIORIDAD JUGADOR / HIT-TEST: un dibujo puede ser el target de Konva aun
+    // con una ficha encima; el modelo de Pinia resuelve primero la ficha.
     if (playerAtPointer) {
       if (targetElement?.type !== 'player') {
         selectAndStartPlayerDrag(playerAtPointer, event)
@@ -783,7 +867,7 @@ function bindStageEvents() {
     if (targetElement) return
     if (event.target.getParent() === overlayGroup) return
 
-    // Respaldo cuando el hit canvas de Konva aún no refleja una flecha recién dibujada.
+    // RESPALDO HIT-TEST: cubre dibujos cuyo hit canvas de Konva aún no se actualizó.
     const arrow = findArrowAt(point)
     if (arrow) {
       startDrawingDrag(arrow, point, event)
@@ -812,6 +896,7 @@ function bindStageEvents() {
 
   })
 
+  /** EVENTOS PUNTERO MOVIMIENTO: actualiza, en orden, tirador, dibujo o previsualización. */
   stage.on('mousemove touchmove', () => {
     if (draggedHandle) {
       const position = stage.getPointerPosition()
@@ -837,6 +922,7 @@ function bindStageEvents() {
     updatePreview()
   })
 
+  /** EVENTOS PUNTERO FIN: termina el gesto activo o abre el editor tras un clic de ficha. */
   stage.on('mouseup touchend', () => {
     if (draggedHandle) {
       draggedHandle = null
@@ -866,6 +952,10 @@ function bindStageEvents() {
   })
 }
 
+/**
+ * RENDER CAMPO: construye una vez las franjas, líneas y marcas reglamentarias
+ * del terreno de juego virtual. Todos los nodos son `listening: false`.
+ */
 function drawPitch() {
   const markings = pitchMarkings.value
   const staticAttrs = { stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, listening: false }
@@ -890,6 +980,7 @@ function drawPitch() {
   }
 }
 
+/** RESPONSIVE CANVAS: redimensiona el Stage y aplica la misma transformación a cada grupo. */
 function resizeStage() {
   if (!stage) return
   stage.size({ width: width.value, height: height.value })
@@ -901,6 +992,7 @@ function resizeStage() {
   stage.batchDraw()
 }
 
+/** TECLADO: elimina la selección activa o la limpia, sin capturar escritura en controles HTML. */
 function onKeyDown(event) {
   if (event.target?.matches('input, textarea, select, [contenteditable="true"]')) return
   if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedElementId !== null) {
@@ -910,20 +1002,30 @@ function onKeyDown(event) {
   }
 }
 
+/**
+ * WATCH RECONCILIACION: cualquier cambio profundo en elementos, selección o
+ * equipos actualiza los nodos Konva y sus estilos dependientes.
+ */
 const stopReconciliation = watch(
   () => [store.elements, store.selectedElementId, store.teams],
   reconcileElements,
   { deep: true }
 )
 
+/** WATCH HERRAMIENTA: refleja de inmediato qué jugadores son draggable. */
 const stopToolReconciliation = watch(
   () => store.selectedTool,
   reconcileElements,
   { flush: 'sync' }
 )
 
+/** WATCH RESPONSIVE: recalcula tamaño y escala al cambiar el contenedor o viewport. */
 const stopResize = watch([width, height, scale, offsetX, offsetY], resizeStage)
 
+/**
+ * CICLO DE VIDA MONTAJE: crea el árbol imperativo Stage > Layers > Groups,
+ * dibuja el campo, registra eventos y reconcilia el estado inicial de Pinia.
+ */
 onMounted(() => {
   stage = new Konva.Stage({ container: containerRef.value, width: width.value, height: height.value })
   backgroundLayer = new Konva.Layer()
@@ -948,6 +1050,7 @@ onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
 })
 
+/** CICLO DE VIDA DESMONTAJE: libera eventos, watchers, nodos Konva y referencias. */
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   stopReconciliation()
@@ -960,6 +1063,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* CONTENEDOR CANVAS: ocupa por completo el área del tablero y desactiva gestos táctiles del navegador. */
 .canvas-container {
   width: 100%;
   height: 100%;
@@ -969,6 +1073,7 @@ onUnmounted(() => {
   touch-action: none;
 }
 
+/* OVERLAY JUGADOR: formulario HTML flotante para nombre y dorsal de la ficha. */
 .player-popover {
   position: absolute;
   z-index: 1;
@@ -982,6 +1087,7 @@ onUnmounted(() => {
   transform: translateX(-50%);
 }
 
+/* CAMPOS OVERLAY JUGADOR: ancho compacto y estilo consistente de los inputs. */
 .player-popover input {
   width: 86px;
   min-width: 0;
@@ -991,10 +1097,12 @@ onUnmounted(() => {
   font: inherit;
 }
 
+/* DORSAL OVERLAY JUGADOR: el segundo input requiere menos espacio horizontal. */
 .player-popover input:last-child {
   width: 52px;
 }
 
+/* OVERLAY DIBUJO: menú flotante con color y acción de eliminar. */
 .color-popover {
   position: absolute;
   z-index: 1;
@@ -1007,6 +1115,7 @@ onUnmounted(() => {
   transform: translate(-50%, -100%);
 }
 
+/* PALETA DIBUJO: cada botón representa un color predefinido. */
 .color-swatch {
   width: 18px;
   height: 18px;
@@ -1016,11 +1125,13 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+/* PALETA DIBUJO ACTIVA: resalta el color que ya tiene el elemento seleccionado. */
 .color-swatch.active {
   border-color: #1f2937;
   box-shadow: 0 0 0 1px #ffffff;
 }
 
+/* ACCION ELIMINAR: separada visualmente de la paleta para evitar pulsaciones accidentales. */
 .delete-drawing-button {
   display: grid;
   width: 18px;
@@ -1035,6 +1146,7 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+/* ICONO ELIMINAR: trazo SVG heredado del color de la acción. */
 .delete-drawing-button svg {
   width: 16px;
   height: 16px;
@@ -1045,6 +1157,7 @@ onUnmounted(() => {
   stroke-width: 2;
 }
 
+/* ESTADO HOVER ELIMINAR: refuerza visualmente la acción destructiva. */
 .delete-drawing-button:hover {
   color: #991b1b;
 }
