@@ -3,6 +3,31 @@ import { ref, watch } from 'vue'
 
 const STORAGE_KEY = 'pizarra-tactica-autosave'
 
+const DEFAULT_PLAYERS = [
+  { type: 'player', x: 30,  y: 340, playerNumber: 1,  playerName: 'POR', color: '#f1c40f' },
+  { type: 'player', x: 200, y: 560, playerNumber: 2,  playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 170, y: 420, playerNumber: 4,  playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 170, y: 260, playerNumber: 5,  playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 200, y: 120, playerNumber: 3,  playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 380, y: 530, playerNumber: 8,  playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 350, y: 340, playerNumber: 6,  playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 380, y: 150, playerNumber: 10, playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 550, y: 560, playerNumber: 7,  playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 570, y: 340, playerNumber: 9,  playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 550, y: 120, playerNumber: 11, playerName: '', color: '#e74c3c' },
+  { type: 'player', x: 660, y: 120, playerNumber: 7,  playerName: '', color: '#3498db' },
+  { type: 'player', x: 650, y: 340, playerNumber: 9,  playerName: '', color: '#3498db' },
+  { type: 'player', x: 660, y: 560, playerNumber: 11, playerName: '', color: '#3498db' },
+  { type: 'player', x: 830, y: 530, playerNumber: 8,  playerName: '', color: '#3498db' },
+  { type: 'player', x: 860, y: 340, playerNumber: 6,  playerName: '', color: '#3498db' },
+  { type: 'player', x: 830, y: 150, playerNumber: 10, playerName: '', color: '#3498db' },
+  { type: 'player', x: 990, y: 560, playerNumber: 2,  playerName: '', color: '#3498db' },
+  { type: 'player', x: 1020, y: 420, playerNumber: 4, playerName: '', color: '#3498db' },
+  { type: 'player', x: 1020, y: 260, playerNumber: 5, playerName: '', color: '#3498db' },
+  { type: 'player', x: 990, y: 120, playerNumber: 3,  playerName: '', color: '#3498db' },
+  { type: 'player', x: 1020, y: 340, playerNumber: 1,  playerName: 'POR', color: '#2ecc71' },
+]
+
 export const usePizarraStore = defineStore('pizarra', () => {
   const saved = localStorage.getItem(STORAGE_KEY)
   const initialElements = saved ? JSON.parse(saved) : []
@@ -23,7 +48,9 @@ export const usePizarraStore = defineStore('pizarra', () => {
     { deep: true }
   )
 
-  let nextId = elements.value.reduce((max, el) => Math.max(max, el.id || 0), 0) + 1
+  let nextId = elements.value.length
+    ? elements.value.reduce((max, el) => Math.max(max, el.id || 0), 0) + 1
+    : 100
 
   function addElement(el) {
     const element = { ...el, id: nextId++ }
@@ -46,12 +73,15 @@ export const usePizarraStore = defineStore('pizarra', () => {
     elements.value = []
   }
 
+  function resetToDefaults() {
+    nextId = 100
+    elements.value = DEFAULT_PLAYERS.map((p, i) => ({ ...p, id: i }))
+  }
+
   function exportToJSON() {
     const data = {
       version: 1,
       exportedAt: new Date().toISOString(),
-      tool: selectedTool.value,
-      color: selectedColor.value,
       elements: elements.value,
     }
     const json = JSON.stringify(data, null, 2)
@@ -86,6 +116,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     updateElement,
     removeElement,
     clearAll,
+    resetToDefaults,
     exportToJSON,
     importFromJSON,
   }

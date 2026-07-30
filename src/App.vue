@@ -6,8 +6,18 @@
 </template>
 
 <script setup>
+import { onMounted } from 'vue'
 import Toolbar from './components/Toolbar.vue'
 import CanvasBoard from './components/CanvasBoard.vue'
+import { usePizarraStore } from './stores/pizarra'
+
+const store = usePizarraStore()
+
+onMounted(() => {
+  if (store.elements.length === 0) {
+    store.resetToDefaults()
+  }
+})
 </script>
 
 <style scoped>
