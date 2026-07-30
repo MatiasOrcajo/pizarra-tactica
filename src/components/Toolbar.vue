@@ -1,7 +1,19 @@
+<!--
+  Toolbar.vue — Panel flotante de herramientas.
+
+  Ubicado en la esquina superior izquierda, permite:
+    - Seleccionar la herramienta activa (jugador, flecha, zona, línea, texto).
+    - Elegir color entre 8 predefinidos o uno personalizado.
+    - Configurar dorsal y nombre del jugador.
+    - Ajustar tamaño de texto y grosor de trazo.
+    - Exportar / importar la pizarra como JSON.
+    - Limpiar todos los elementos.
+-->
 <template>
   <div class="toolbar">
     <h2 class="toolbar-title">Pizarra</h2>
 
+    <!-- ========== SELECTOR DE HERRAMIENTA ========== -->
     <div class="tool-section">
       <label class="section-label">Herramienta</label>
       <div class="tool-grid">
@@ -18,6 +30,7 @@
       </div>
     </div>
 
+    <!-- ========== PALETA DE COLORES ========== -->
     <div class="tool-section">
       <label class="section-label">Color</label>
       <div class="color-palette">
@@ -28,6 +41,7 @@
           :style="{ background: c }"
           @click="store.selectedColor = c"
         />
+        <!-- Selector de color nativo del navegador -->
         <input
           type="color"
           :value="store.selectedColor"
@@ -37,6 +51,7 @@
       </div>
     </div>
 
+    <!-- ========== DATOS DEL JUGADOR (solo si la herramienta es 'player') ========== -->
     <div v-if="store.selectedTool === 'player'" class="tool-section">
       <label class="section-label">Jugador</label>
       <div class="input-group">
@@ -59,6 +74,7 @@
       </div>
     </div>
 
+    <!-- ========== TEXTO LIBRE (solo si la herramienta es 'text') ========== -->
     <div v-if="store.selectedTool === 'text'" class="tool-section">
       <label class="section-label">Texto</label>
       <div class="input-group">
@@ -83,6 +99,7 @@
       </div>
     </div>
 
+    <!-- ========== GROSOR DE TRAZO (flecha, línea, zona) ========== -->
     <div
       v-if="['arrow', 'line', 'zone'].includes(store.selectedTool)"
       class="tool-section"
@@ -99,6 +116,7 @@
       <span class="slider-value">{{ store.strokeWidth }}px</span>
     </div>
 
+    <!-- ========== ACCIONES (exportar, importar, limpiar) ========== -->
     <div class="tool-section actions-section">
       <label class="section-label">Acciones</label>
       <button class="action-btn" @click="store.exportToJSON()">
@@ -123,10 +141,16 @@
 </template>
 
 <script setup>
+/**
+ * Toolbar.vue (script) — Lógica del panel de herramientas.
+ *
+ * Todas las interacciones modifican directamente el store de Pinia.
+ */
 import { usePizarraStore } from '../stores/pizarra'
 
 const store = usePizarraStore()
 
+/** Lista de herramientas disponibles (valor, etiqueta, icono unicode) */
 const tools = [
   { value: 'player', label: 'Jugador', icon: '●' },
   { value: 'arrow', label: 'Flecha', icon: '→' },
@@ -135,6 +159,7 @@ const tools = [
   { value: 'text', label: 'Texto', icon: 'T' },
 ]
 
+/** Paleta de 8 colores predefinidos */
 const colors = [
   '#e74c3c',
   '#3498db',
@@ -146,6 +171,7 @@ const colors = [
   '#ecf0f1',
 ]
 
+/** Lee un archivo .json del input file e importa los elementos al store */
 function handleImport(e) {
   const file = e.target.files[0]
   if (!file) return
@@ -158,6 +184,7 @@ function handleImport(e) {
   e.target.value = ''
 }
 
+/** Pide confirmación antes de borrar todos los elementos */
 function confirmClear() {
   if (store.elements.length === 0) return
   if (confirm('¿Borrar todos los elementos de la pizarra?')) {
