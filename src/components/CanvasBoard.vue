@@ -76,7 +76,7 @@ const selectedPlayer = computed(() => {
 /** SELECCION DIBUJO: expone la anotación activa para el selector de color. */
 const selectedDrawing = computed(() => {
   const element = store.selectedElement
-  return element?.type !== 'player' ? element : null
+  return element && !['player', 'ball'].includes(element.type) ? element : null
 })
 
 /** OVERLAY JUGADOR: convierte la posición virtual de la ficha a píxeles HTML. */
@@ -122,6 +122,7 @@ let drawingGroup = null
 let playerGroup = null
 let overlayGroup = null
 let previewNode = null
+let tacticalZonesGroup = null
 let isDrawing = false
 let drawStart = null
 let drawCurrent = null
@@ -187,6 +188,15 @@ function findPlayerAt(point) {
     const element = store.elements[index]
     if (element.type !== 'player') continue
     if (Math.hypot(point.x - element.x, point.y - element.y) <= 20) return element
+  }
+  return null
+}
+
+/** HIT-TEST BALON: respaldo para iniciar su arrastre si Konva aún no actualizó el hit graph. */
+function findBallAt(point) {
+  for (let index = store.elements.length - 1; index >= 0; index -= 1) {
+    const element = store.elements[index]
+    if (element.type === 'ball' && Math.hypot(point.x - element.x, point.y - element.y) <= 16) return element
   }
   return null
 }
@@ -416,6 +426,48 @@ function updatePlayer(group, el) {
   })
 }
 
+/** RENDER BALON: crea un Telstar inspirado en el balón del Mundial México 1970. */
+function createBall(el) {
+  const group = new Konva.Group({ draggable: false, listening: true, elementId: el.id })
+  const ball = new Konva.Circle()
+  const centerPatch = new Konva.RegularPolygon({ sides: 5, radius: 4.5, fill: '#171717', rotation: -90, listening: false })
+  const patches = Array.from({ length: 5 }, (_, index) => {
+    const angle = -Math.PI / 2 + index * (Math.PI * 2 / 5)
+    return new Konva.RegularPolygon({
+      x: Math.cos(angle) * 9,
+      y: Math.sin(angle) * 9,
+      sides: 5,
+      radius: 2.8,
+      fill: '#171717',
+      rotation: angle * 180 / Math.PI - 90,
+      listening: false,
+    })
+  })
+  group.add(ball, centerPatch, ...patches)
+  bindSelection(group, el.id)
+  playerGroup.add(group)
+  return group
+}
+
+/** RENDER BALON: dibuja un balón clásico y sincroniza su posición virtual. */
+function updateBall(group, el) {
+  const selected = isSelected(el)
+  group.position({ x: el.x, y: el.y })
+  group.draggable(false)
+  group.getChildren()[0].setAttrs({
+    x: 0,
+    y: 0,
+    radius: 14,
+    fill: '#ffffff',
+    stroke: selected ? '#4a6cf7' : '#1f2937',
+    strokeWidth: selected ? 3 : 2,
+    shadowColor: '#000000',
+    shadowBlur: 3,
+    shadowOpacity: 0.35,
+    shadowOffset: { x: 1, y: 2 },
+  })
+}
+
 /** RENDER FLECHA: dibuja la trayectoria recta o curva y su punta con Canvas 2D. */
 function drawArrow(ctx, el) {
   const controlX = el.cx ?? (el.x + el.x2) / 2
@@ -602,6 +654,7 @@ function updateText(node, el) {
 /** FACTORIA KONVA: construye el nodo correcto para cada tipo persistido en Pinia. */
 function createElement(el) {
   if (el.type === 'player') return createPlayer(el)
+  if (el.type === 'ball') return createBall(el)
   if (el.type === 'arrow') return createArrow(el)
   if (el.type === 'zone') return createZone(el)
   if (el.type === 'circle') return createCircle(el)
@@ -613,6 +666,7 @@ function createElement(el) {
 /** DESPACHO RENDER: aplica la actualización específica al nodo Konva existente. */
 function updateElement(node, el) {
   if (el.type === 'player') updatePlayer(node, el)
+  else if (el.type === 'ball') updateBall(node, el)
   else if (el.type === 'arrow') updateArrow(node, el)
   else if (el.type === 'zone') updateZone(node, el)
   else if (el.type === 'circle') updateCircle(node, el)
@@ -878,6 +932,12 @@ function bindStageEvents() {
     if (event.target.getParent() === overlayGroup) return
 
     // RESPALDO HIT-TEST: cubre dibujos cuyo hit canvas de Konva aún no se actualizó.
+    const ball = findBallAt(point)
+    if (ball) {
+      startDrawingDrag(ball, point, event)
+      return
+    }
+
     const arrow = findArrowAt(point)
     if (arrow) {
       startDrawingDrag(arrow, point, event)
@@ -964,6 +1024,80 @@ function bindStageEvents() {
   })
 }
 
+/** ZONAS TÁCTICAS: constantes de la rejilla de 18 zonas. */
+const TACTICAL_ZONE_LINES_H = [138.4, 541.6]
+const TACTICAL_ZONE_LINES_V = [165, 345, 525, 705, 885]
+const TACTICAL_ZONE_COLOR = '#f1c40f80'
+const TACTICAL_ZONE_DASH = [10, 6]
+const TACTICAL_ZONE_TEXT_COLOR = '#f1c40f'
+
+/**
+ * ZONAS TÁCTICAS: dibuja la rejilla de 18 zonas imperativamente con Konva.Line
+ * y Konva.Text. Numeración en orden vertical por columna (Col1→1,2,3…).
+ */
+function drawTacticalZones() {
+  if (!tacticalZonesGroup) return
+  tacticalZonesGroup.destroyChildren()
+
+  // Líneas horizontales
+  for (const y of TACTICAL_ZONE_LINES_H) {
+    tacticalZonesGroup.add(new Konva.Line({
+      points: [0, y, VIRTUAL_W, y],
+      stroke: TACTICAL_ZONE_COLOR,
+      strokeWidth: 2,
+      dash: TACTICAL_ZONE_DASH,
+      listening: false,
+    }))
+  }
+
+  // Líneas verticales
+  for (const x of TACTICAL_ZONE_LINES_V) {
+    tacticalZonesGroup.add(new Konva.Line({
+      points: [x, 0, x, VIRTUAL_H],
+      stroke: TACTICAL_ZONE_COLOR,
+      strokeWidth: 2,
+      dash: TACTICAL_ZONE_DASH,
+      listening: false,
+    }))
+  }
+
+  // Numeración de zonas: orden vertical por columna
+  const xBounds = [0, ...TACTICAL_ZONE_LINES_V, VIRTUAL_W]
+  const yBounds = [0, ...TACTICAL_ZONE_LINES_H, VIRTUAL_H]
+  let zoneNum = 1
+
+  for (let col = 0; col < xBounds.length - 1; col++) {
+    for (let row = 0; row < yBounds.length - 1; row++) {
+      const cx = (xBounds[col] + xBounds[col + 1]) / 2
+      const cy = (yBounds[row] + yBounds[row + 1]) / 2
+      tacticalZonesGroup.add(new Konva.Text({
+        x: cx,
+        y: cy,
+        text: String(zoneNum),
+        fontSize: 18,
+        fontStyle: 'bold',
+        fill: TACTICAL_ZONE_TEXT_COLOR,
+        align: 'center',
+        verticalAlign: 'middle',
+        offsetX: 5,
+        offsetY: 9,
+        listening: false,
+      }))
+      zoneNum++
+    }
+  }
+
+  pitchLayer.batchDraw()
+}
+
+/** ZONAS TÁCTICAS: alterna la visibilidad de la rejilla. */
+function toggleTacticalZones(show) {
+  if (!tacticalZonesGroup) return
+  tacticalZonesGroup.visible(show)
+  drawTacticalZones()
+  pitchLayer.batchDraw()
+}
+
 /**
  * RENDER CAMPO: construye una vez las franjas, líneas y marcas reglamentarias
  * del terreno de juego virtual. Todos los nodos son `listening: false`.
@@ -1001,6 +1135,10 @@ function resizeStage() {
   pitchGroup.setAttrs(transform)
   elementGroup.setAttrs(transform)
   overlayGroup.setAttrs(transform)
+  if (tacticalZonesGroup) {
+    tacticalZonesGroup.setAttrs(transform)
+    if (store.showTacticalZones) drawTacticalZones()
+  }
   stage.batchDraw()
 }
 
@@ -1040,6 +1178,12 @@ const stopToolReconciliation = watch(
 /** WATCH RESPONSIVE: recalcula tamaño y escala al cambiar el contenedor o viewport. */
 const stopResize = watch([width, height, scale, offsetX, offsetY], resizeStage)
 
+/** WATCH ZONAS TÁCTICAS: dibuja o oculta la rejilla al cambiar la bandera. */
+const stopTacticalZones = watch(
+  () => store.showTacticalZones,
+  (show) => toggleTacticalZones(show)
+)
+
 /**
  * CICLO DE VIDA MONTAJE: crea el árbol imperativo Stage > Layers > Groups,
  * dibuja el campo, registra eventos y reconcilia el estado inicial de Pinia.
@@ -1057,11 +1201,14 @@ onMounted(() => {
   playerGroup = new Konva.Group()
   overlayGroup = new Konva.Group()
   pitchLayer.add(pitchGroup)
+  tacticalZonesGroup = new Konva.Group({ visible: store.showTacticalZones })
+  pitchLayer.add(tacticalZonesGroup)
   elementGroup.add(drawingGroup, playerGroup)
   elementLayer.add(elementGroup)
   overlayLayer.add(overlayGroup)
   stage.add(backgroundLayer, pitchLayer, elementLayer, overlayLayer)
   drawPitch()
+  if (store.showTacticalZones) drawTacticalZones()
   bindStageEvents()
   resizeStage()
   reconcileElements()
@@ -1074,6 +1221,7 @@ onUnmounted(() => {
   stopReconciliation()
   stopToolReconciliation()
   stopResize()
+  stopTacticalZones()
   elementNodes.clear()
   stage?.destroy()
   stage = null

@@ -8,6 +8,7 @@ import { ref, reactive, computed, watch } from 'vue'
 const STORAGE_KEY = 'pizarra-tactica-autosave'
 const HISTORY_LIMIT = 100
 const NEUTRAL_LINE_COLOR = '#ffffff'
+const CENTER_SPOT = { x: 525, y: 340 }
 
 /**
  * FORMATIONS — Plantillas de posiciones para 11 jugadores.
@@ -166,6 +167,11 @@ function generateTeamPlayers(teamId, team, startId = 0) {
   })
 }
 
+/** Crea el balón en el punto central del campo virtual. */
+function createBall(id) {
+  return { id, type: 'ball', x: CENTER_SPOT.x, y: CENTER_SPOT.y }
+}
+
 /** Configuración por defecto de los equipos */
 function defaultTeams() {
   return {
@@ -253,6 +259,18 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
   /** Equipo al que se asignan los jugadores creados manualmente (1 o 2) */
   const activeTeam = ref(1)
+
+  // ======================
+  // ZONAS TÁCTICAS
+  // ======================
+
+  /** Bandera para mostrar/ocultar la rejilla de 18 zonas tácticas. */
+  const showTacticalZones = ref(false)
+
+  /** Alterna la visibilidad de la superposición de zonas tácticas. */
+  function toggleTacticalZones() {
+    showTacticalZones.value = !showTacticalZones.value
+  }
 
   // ======================
   // AUTOGUARDADO
@@ -444,9 +462,9 @@ export const usePizarraStore = defineStore('pizarra', () => {
   }
 
   function clearDrawings() {
-    if (!elements.value.some((el) => el.type !== 'player')) return
+    if (!elements.value.some((el) => el.type !== 'player' && el.type !== 'ball')) return
     recordHistory()
-    elements.value = elements.value.filter((el) => el.type === 'player')
+    elements.value = elements.value.filter((el) => el.type === 'player' || el.type === 'ball')
     selectedElementId.value = null
   }
 
@@ -464,7 +482,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     nextId += t1.length
     const t2 = generateTeamPlayers(2, teams.team2, nextId)
     nextId += t2.length
-    elements.value = [...t1, ...t2]
+    elements.value = [...t1, ...t2, createBall(nextId++)]
     selectedElementId.value = null
   }
 
@@ -479,7 +497,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     nextId += team1Players.length
     const team2Players = generateTeamPlayers(2, teams.team2, nextId)
     nextId += team2Players.length
-    elements.value = [...team1Players, ...team2Players]
+    elements.value = [...team1Players, ...team2Players, createBall(nextId++)]
     selectedElementId.value = null
   }
 
@@ -638,6 +656,10 @@ export const usePizarraStore = defineStore('pizarra', () => {
     fontSize,
     strokeWidth,
     activeTeam,
+
+    // Zonas tácticas
+    showTacticalZones,
+    toggleTacticalZones,
 
     // CRUD
     addElement,

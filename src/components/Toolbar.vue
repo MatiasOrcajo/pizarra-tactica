@@ -9,6 +9,10 @@
       </label>
       <button class="action-button danger" @click="clearDrawings">Limpiar todo</button>
       <button class="action-button" @click="restoreFormations">Reestablecer tácticas</button>
+      <button
+        :class="['action-button', { active: store.showTacticalZones }]"
+        @click="store.toggleTacticalZones()"
+      >Zonas tácticas</button>
     </section>
 
     <section class="section">
@@ -117,6 +121,12 @@ h2 {
 .tool-button:hover {
   border-color: #666;
   background: #3a3a4a;
+}
+
+.action-button.active {
+  border-color: #4a6cf7;
+  background: #4a6cf7;
+  color: #fff;
 }
 
 .danger {
