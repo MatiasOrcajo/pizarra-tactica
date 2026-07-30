@@ -108,6 +108,7 @@ let drawCurrent = null
 let handleElementId = null
 let editHandles = []
 let draggedHandle = null
+let draggedDrawing = null
 let playerPointerDown = null
 
 // Cada elemento del store conserva su nodo Konva durante toda su vida.
@@ -252,6 +253,40 @@ function selectAndStartPlayerDrag(player, event) {
   group.startDrag(event)
 }
 
+function startDrawingDrag(element, point, event) {
+  if (!isFreeTool() || element.type === 'player') return
+  playerPopoverId.value = null
+  store.selectElement(element.id)
+  draggedDrawing = { element: { ...element }, point }
+  event.evt?.preventDefault?.()
+}
+
+function drawingDragChanges(element, dx, dy) {
+  if (element.type === 'arrow') {
+    return {
+      x: element.x + dx,
+      y: element.y + dy,
+      x2: element.x2 + dx,
+      y2: element.y2 + dy,
+      ...(element.cx == null ? {} : { cx: element.cx + dx, cy: element.cy + dy }),
+    }
+  }
+  if (element.type === 'line') {
+    return {
+      x: element.x + dx,
+      y: element.y + dy,
+      x2: element.x2 + dx,
+      y2: element.y2 + dy,
+      startPlayerId: null,
+      endPlayerId: null,
+    }
+  }
+  if (element.type === 'zone') {
+    return { x: element.x + dx, y: element.y + dy, x2: element.x2 + dx, y2: element.y2 + dy }
+  }
+  return { x: element.x + dx, y: element.y + dy }
+}
+
 function bindSelection(node, id) {
   node.setAttr('elementId', id)
   node.on('mousedown touchstart', () => {
@@ -352,25 +387,11 @@ function drawArrow(ctx, el) {
 }
 
 function createArrow(el) {
-  const group = new Konva.Group({ draggable: isFreeTool() })
+  const group = new Konva.Group()
   const visual = new Konva.Shape({ listening: false })
   const hitArea = new Konva.Shape({ listening: true })
   group.add(visual, hitArea)
   bindSelection(hitArea, el.id)
-  group.on('dragend', () => {
-    const current = store.elements.find((item) => item.id === el.id)
-    if (!current) return
-    const dx = group.x()
-    const dy = group.y()
-    if (!dx && !dy) return
-    store.updateElement(el.id, {
-      x: current.x + dx,
-      y: current.y + dy,
-      x2: current.x2 + dx,
-      y2: current.y2 + dy,
-      ...(current.cx == null ? {} : { cx: current.cx + dx, cy: current.cy + dy }),
-    })
-  })
   drawingGroup.add(group)
   return group
 }
@@ -378,7 +399,6 @@ function createArrow(el) {
 function updateArrow(group, el) {
   const selected = isSelected(el)
   if (!group.isDragging()) group.position({ x: 0, y: 0 })
-  group.draggable(isFreeTool())
   const visual = group.getChildren()[0]
   const hitArea = group.getChildren()[1]
   visual.setAttrs({
@@ -421,15 +441,8 @@ function updateArrow(group, el) {
 }
 
 function createZone(el) {
-  const node = new Konva.Rect({ draggable: isFreeTool() })
+  const node = new Konva.Rect()
   bindSelection(node, el.id)
-  node.on('dragend', () => {
-    const current = store.elements.find((item) => item.id === el.id)
-    if (!current) return
-    const dx = node.x() - current.x
-    const dy = node.y() - current.y
-    store.updateElement(el.id, { x: node.x(), y: node.y(), x2: current.x2 + dx, y2: current.y2 + dy })
-  })
   drawingGroup.add(node)
   return node
 }
@@ -444,7 +457,6 @@ function updateZone(node, el) {
     strokeWidth: el.strokeWidth || 3,
     fill: `${el.color}22`,
     dash: [8, 4],
-    draggable: isFreeTool(),
     shadowColor: selected ? '#ffffff' : undefined,
     shadowBlur: selected ? 6 : 0,
     shadowOffset: { x: 0, y: 0 },
@@ -452,11 +464,8 @@ function updateZone(node, el) {
 }
 
 function createCircle(el) {
-  const node = new Konva.Circle({ draggable: isFreeTool() })
+  const node = new Konva.Circle()
   bindSelection(node, el.id)
-  node.on('dragend', () => {
-    store.updateElement(el.id, { x: node.x(), y: node.y() })
-  })
   drawingGroup.add(node)
   return node
 }
@@ -470,7 +479,6 @@ function updateCircle(node, el) {
     strokeWidth: el.strokeWidth || 3,
     fill: `${el.color}22`,
     dash: [8, 4],
-    draggable: isFreeTool(),
     shadowColor: selected ? '#ffffff' : undefined,
     shadowBlur: selected ? 6 : 0,
     shadowOffset: { x: 0, y: 0 },
@@ -478,23 +486,8 @@ function updateCircle(node, el) {
 }
 
 function createLine(el) {
-  const node = new Konva.Line({ draggable: isFreeTool() })
+  const node = new Konva.Line()
   bindSelection(node, el.id)
-  node.on('dragend', () => {
-    const current = store.elements.find((item) => item.id === el.id)
-    if (!current) return
-    const dx = node.x()
-    const dy = node.y()
-    if (!dx && !dy) return
-    store.updateElement(el.id, {
-      x: current.x + dx,
-      y: current.y + dy,
-      x2: current.x2 + dx,
-      y2: current.y2 + dy,
-      startPlayerId: null,
-      endPlayerId: null,
-    })
-  })
   drawingGroup.add(node)
   return node
 }
@@ -508,7 +501,6 @@ function updateLine(node, el) {
     strokeWidth: el.strokeWidth || 3,
     hitStrokeWidth: 20,
     lineCap: 'round',
-    draggable: isFreeTool(),
     shadowColor: selected ? '#ffffff' : undefined,
     shadowBlur: selected ? 6 : 0,
     shadowOffset: { x: 0, y: 0 },
@@ -516,11 +508,8 @@ function updateLine(node, el) {
 }
 
 function createText(el) {
-  const node = new Konva.Text({ draggable: isFreeTool() })
+  const node = new Konva.Text()
   bindSelection(node, el.id)
-  node.on('dragend', () => {
-    store.updateElement(el.id, { x: node.x(), y: node.y() })
-  })
   drawingGroup.add(node)
   return node
 }
@@ -533,7 +522,6 @@ function updateText(node, el) {
     fontSize: el.fontSize || 20,
     fontStyle: 'bold',
     fill: el.color,
-    draggable: isFreeTool(),
     shadowColor: selected ? '#ffffff' : undefined,
     shadowBlur: selected ? 6 : 0,
     shadowOffset: { x: 0, y: 0 },
@@ -770,44 +758,53 @@ function bindStageEvents() {
 
     playerPointerDown = playerAtPointer ? { id: playerAtPointer.id, point } : null
 
+    const targetId = elementIdFromNode(event.target)
+    const targetElement = store.elements.find((element) => element.id === targetId)
+
+    // Drawings can be the Konva hit target even when a player is visually
+    // inside them. Resolve players from the board model first in that case.
+    if (playerAtPointer) {
+      if (targetElement?.type !== 'player') {
+        selectAndStartPlayerDrag(playerAtPointer, event)
+      }
+      return
+    }
+
     if (startHandleDrag(point)) {
       playerPointerDown = null
       event.evt?.preventDefault?.()
       return
     }
 
-    // Los elementos ya seleccionan mediante sus handlers nativos y no inician dibujo.
-    if (elementIdFromNode(event.target) !== null || event.target.getParent() === overlayGroup) return
-
-    // Evita crear una ficha nueva cuando el hit-test nativo devolvió el Stage
-    // pese a que el puntero cayó dentro de una ficha ya existente.
-    if (playerAtPointer) {
-      selectAndStartPlayerDrag(playerAtPointer, event)
+    if (targetElement && targetElement.type !== 'player') {
+      startDrawingDrag(targetElement, point, event)
       return
     }
+    if (targetElement) return
+    if (event.target.getParent() === overlayGroup) return
 
     // Respaldo cuando el hit canvas de Konva aún no refleja una flecha recién dibujada.
     const arrow = findArrowAt(point)
     if (arrow) {
-      store.selectElement(arrow.id)
+      startDrawingDrag(arrow, point, event)
       return
     }
 
     const line = findLineAt(point)
     if (line) {
-      store.selectElement(line.id)
+      startDrawingDrag(line, point, event)
       return
     }
 
     const zone = findZoneAt(point)
     if (zone) {
-      store.selectElement(zone.id)
+      startDrawingDrag(zone, point, event)
       return
     }
 
     const circle = findCircleAt(point)
     if (circle) {
-      store.selectElement(circle.id)
+      startDrawingDrag(circle, point, event)
       return
     }
 
@@ -824,6 +821,15 @@ function bindStageEvents() {
       return
     }
 
+    if (draggedDrawing) {
+      const position = stage.getPointerPosition()
+      if (!position || !scale.value) return
+      const point = screenToVirtual(position)
+      const { element, point: start } = draggedDrawing
+      store.updateElement(element.id, drawingDragChanges(element, point.x - start.x, point.y - start.y))
+      return
+    }
+
     if (!isDrawing) return
     const position = stage.getPointerPosition()
     if (!position || !scale.value) return
@@ -834,6 +840,11 @@ function bindStageEvents() {
   stage.on('mouseup touchend', () => {
     if (draggedHandle) {
       draggedHandle = null
+      return
+    }
+
+    if (draggedDrawing) {
+      draggedDrawing = null
       return
     }
 

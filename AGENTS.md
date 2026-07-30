@@ -11,6 +11,7 @@
 - `src/stores/pizarra.js` is the absolute source of truth (Pinia) for board elements, team configuration, selection, imports, exports, and autosave. UI components must mutate it through its public store methods.
 - `CanvasBoard.vue` is responsible for rendering. It manages imperative Konva nodes and reconciles them manually from `store.elements`.
 - **Interaction & Reconciliations:** Always use imperative checks like `node.isDragging()` during state updates to prevent Pinia UI reconciliations from interrupting active Konva native drag-and-drop interactions.
+- **Drawing drag hit-tests:** Do not use Konva native dragging for arrows, lines, zones, circles, or text. Their custom hit areas, stage-level fallback hit-tests, and reactive reconciliation can race, causing a selected drawing to never drag or to drag inconsistently. `CanvasBoard.vue` owns their drag gesture at the Stage level: snapshot the element and virtual pointer on `mousedown`, update store coordinates from that snapshot on `mousemove`, and clear it on `mouseup`. Keep native nodes listening only for initial hit detection; player groups remain the sole native-draggable elements.
 - Board coordinates use a fixed `1050 x 680` virtual pitch from `useFootballPitch.js`. Convert pointer input with `screenToVirtual`; never persist viewport-scaled coordinates.
 - HTML Overlays: Absolute positioned HTML elements (like editing popovers) used alongside the canvas must calculate their position synchronizing with Konva object virtual coordinates, scale, and offsets.
 
