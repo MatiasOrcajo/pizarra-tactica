@@ -33,6 +33,7 @@ const store = usePizarraStore()
 const tools = [
   { value: 'arrow', label: 'Flecha' },
   { value: 'zone', label: 'Zona' },
+  { value: 'circle', label: 'Círculo' },
   { value: 'line', label: 'Linea' },
   { value: 'text', label: 'Texto' },
 ]

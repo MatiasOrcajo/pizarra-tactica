@@ -17,6 +17,17 @@
       @input="updateSelectedPlayerNumber"
     >
   </div>
+  <div v-if="selectedDrawing" class="color-popover" :style="colorPopoverStyle">
+    <button
+      v-for="color in PRESET_COLORS"
+      :key="color"
+      class="color-swatch"
+      :class="{ active: selectedDrawing.color === color }"
+      :style="{ backgroundColor: color }"
+      :aria-label="`Color ${color}`"
+      @click="store.updateElement(selectedDrawing.id, { color })"
+    ></button>
+  </div>
 </template>
 
 <script setup>
@@ -37,6 +48,11 @@ const selectedPlayer = computed(() => {
   return element?.type === 'player' && element.id === playerPopoverId.value ? element : null
 })
 
+const selectedDrawing = computed(() => {
+  const element = store.selectedElement
+  return element?.type !== 'player' ? element : null
+})
+
 const playerPopoverStyle = computed(() => {
   if (!selectedPlayer.value) return {}
   return {
@@ -45,10 +61,24 @@ const playerPopoverStyle = computed(() => {
   }
 })
 
+const colorPopoverStyle = computed(() => {
+  if (!selectedDrawing.value) return {}
+  const element = selectedDrawing.value
+  const x = element.x2 == null ? element.x : (element.x + element.x2) / 2
+  const y = element.type === 'circle'
+    ? element.y - element.radius
+    : element.y2 == null ? element.y : Math.min(element.y, element.y2)
+  return {
+    left: `${x * scale.value + offsetX.value}px`,
+    top: `${y * scale.value + offsetY.value - 12}px`,
+  }
+})
+
 const LINE_COLOR = '#ffffff'
 const LINE_WIDTH = 2
 const PITCH_GREEN = '#2e7d32'
 const DRAW_THRESHOLD = 8
+const PRESET_COLORS = ['#ffffff', '#f1c40f', '#e74c3c', '#3498db', '#2ecc71', '#9b59b6']
 
 let stage = null
 let backgroundLayer = null
@@ -62,9 +92,9 @@ let previewNode = null
 let isDrawing = false
 let drawStart = null
 let drawCurrent = null
-let handleArrowId = null
-let arrowHandles = []
-let draggedArrowHandle = null
+let handleElementId = null
+let editHandles = []
+let draggedHandle = null
 let playerPointerDown = null
 
 // Cada elemento del store conserva su nodo Konva durante toda su vida.
@@ -141,6 +171,27 @@ function findArrowAt(point) {
       if (pointNearSegment(point, previous, current)) return element
       previous = current
     }
+  }
+  return null
+}
+
+function findZoneAt(point) {
+  for (let index = store.elements.length - 1; index >= 0; index -= 1) {
+    const element = store.elements[index]
+    if (element.type !== 'zone') continue
+    const left = Math.min(element.x, element.x2)
+    const right = Math.max(element.x, element.x2)
+    const top = Math.min(element.y, element.y2)
+    const bottom = Math.max(element.y, element.y2)
+    if (point.x >= left && point.x <= right && point.y >= top && point.y <= bottom) return element
+  }
+  return null
+}
+
+function findCircleAt(point) {
+  for (let index = store.elements.length - 1; index >= 0; index -= 1) {
+    const element = store.elements[index]
+    if (element.type === 'circle' && Math.hypot(point.x - element.x, point.y - element.y) <= element.radius) return element
   }
   return null
 }
@@ -354,6 +405,32 @@ function updateZone(node, el) {
   })
 }
 
+function createCircle(el) {
+  const node = new Konva.Circle({ draggable: true })
+  bindSelection(node, el.id)
+  node.on('dragend', () => {
+    store.updateElement(el.id, { x: node.x(), y: node.y() })
+  })
+  elementGroup.add(node)
+  return node
+}
+
+function updateCircle(node, el) {
+  const selected = isSelected(el)
+  if (!node.isDragging()) node.position({ x: el.x, y: el.y })
+  node.setAttrs({
+    radius: el.radius,
+    stroke: el.color,
+    strokeWidth: el.strokeWidth || 3,
+    fill: `${el.color}22`,
+    dash: [8, 4],
+    draggable: true,
+    shadowColor: selected ? '#ffffff' : undefined,
+    shadowBlur: selected ? 6 : 0,
+    shadowOffset: { x: 0, y: 0 },
+  })
+}
+
 function createLine(el) {
   const node = new Konva.Line()
   bindSelection(node, el.id)
@@ -404,6 +481,7 @@ function createElement(el) {
   if (el.type === 'player') return createPlayer(el)
   if (el.type === 'arrow') return createArrow(el)
   if (el.type === 'zone') return createZone(el)
+  if (el.type === 'circle') return createCircle(el)
   if (el.type === 'line') return createLine(el)
   if (el.type === 'text') return createText(el)
   return null
@@ -413,6 +491,7 @@ function updateElement(node, el) {
   if (el.type === 'player') updatePlayer(node, el)
   else if (el.type === 'arrow') updateArrow(node, el)
   else if (el.type === 'zone') updateZone(node, el)
+  else if (el.type === 'circle') updateCircle(node, el)
   else if (el.type === 'line') updateLine(node, el)
   else if (el.type === 'text') updateText(node, el)
 }
@@ -438,49 +517,66 @@ function reconcileElements() {
     updateElement(node, el)
   }
 
-  renderArrowHandles()
+  renderEditHandles()
   elementLayer.batchDraw()
   overlayLayer.batchDraw()
 }
 
-function arrowHandleDefinitions(arrow) {
-  const middleX = arrow.cx ?? (arrow.x + arrow.x2) / 2
-  const middleY = arrow.cy ?? (arrow.y + arrow.y2) / 2
-  return [
-    { x: arrow.x, y: arrow.y, fill: '#4a6cf7', changes: (point) => ({ x: point.x, y: point.y }) },
-    { x: middleX, y: middleY, fill: '#f1c40f', changes: (point) => ({ cx: point.x, cy: point.y }) },
-    { x: arrow.x2, y: arrow.y2, fill: '#e74c3c', changes: (point) => ({ x2: point.x, y2: point.y }) },
-  ]
+function handleDefinitions(element) {
+  if (element.type === 'arrow') {
+    const middleX = element.cx ?? (element.x + element.x2) / 2
+    const middleY = element.cy ?? (element.y + element.y2) / 2
+    return [
+      { x: element.x, y: element.y, fill: '#4a6cf7', changes: (point) => ({ x: point.x, y: point.y }) },
+      { x: middleX, y: middleY, fill: '#f1c40f', changes: (point) => ({ cx: point.x, cy: point.y }) },
+      { x: element.x2, y: element.y2, fill: '#e74c3c', changes: (point) => ({ x2: point.x, y2: point.y }) },
+    ]
+  }
+  if (element.type === 'zone') {
+    return [
+      { x: element.x, y: element.y, changes: (point) => ({ x: point.x, y: point.y }) },
+      { x: element.x2, y: element.y, changes: (point) => ({ x2: point.x, y: point.y }) },
+      { x: element.x2, y: element.y2, changes: (point) => ({ x2: point.x, y2: point.y }) },
+      { x: element.x, y: element.y2, changes: (point) => ({ x: point.x, y2: point.y }) },
+    ]
+  }
+  if (element.type === 'circle') {
+    return [{
+      x: element.x + element.radius,
+      y: element.y,
+      changes: (point) => ({ radius: Math.max(DRAW_THRESHOLD, Math.hypot(point.x - element.x, point.y - element.y)) }),
+    }]
+  }
+  return []
 }
 
-function startArrowHandleDrag(point) {
-  const arrow = store.selectedElement
-  if (!arrow || arrow.type !== 'arrow') return false
+function startHandleDrag(point) {
+  const element = store.selectedElement
+  if (!element) return false
 
-  const handle = arrowHandleDefinitions(arrow).find((item) => Math.hypot(point.x - item.x, point.y - item.y) <= 18)
+  const handle = handleDefinitions(element).find((item) => Math.hypot(point.x - item.x, point.y - item.y) <= 18)
   if (!handle) return false
 
-  draggedArrowHandle = { arrowId: arrow.id, changes: handle.changes }
+  draggedHandle = { elementId: element.id, changes: handle.changes }
   return true
 }
 
-function renderArrowHandles() {
-  const arrow = store.selectedElement
-  if (!arrow || arrow.type !== 'arrow') {
+function renderEditHandles() {
+  const element = store.selectedElement
+  const definitions = element ? handleDefinitions(element) : []
+  if (!element || !definitions.length) {
     overlayGroup.destroyChildren()
-    handleArrowId = null
-    arrowHandles = []
-    draggedArrowHandle = null
+    handleElementId = null
+    editHandles = []
+    draggedHandle = null
     return
   }
 
-  const definitions = arrowHandleDefinitions(arrow)
-
-  if (handleArrowId !== arrow.id) {
+  if (handleElementId !== element.id) {
     overlayGroup.destroyChildren()
-    handleArrowId = arrow.id
-    arrowHandles = definitions.map((handle) => {
-      const node = new Konva.Circle({ x: handle.x, y: handle.y, radius: 8, fill: handle.fill, stroke: '#ffffff', strokeWidth: 2, listening: false })
+    handleElementId = element.id
+    editHandles = definitions.map((handle) => {
+      const node = new Konva.Circle({ x: handle.x, y: handle.y, radius: 8, fill: handle.fill || '#4a6cf7', stroke: '#ffffff', strokeWidth: 2, listening: false })
       overlayGroup.add(node)
       return node
     })
@@ -488,7 +584,7 @@ function renderArrowHandles() {
   }
 
   definitions.forEach((handle, index) => {
-    const node = arrowHandles[index]
+    const node = editHandles[index]
     if (node) node.position({ x: handle.x, y: handle.y })
   })
 }
@@ -504,9 +600,9 @@ function updatePreview() {
   if (!drawStart || !drawCurrent) return
   const tool = store.selectedTool
   if (!previewNode) {
-    previewNode = tool === 'zone'
-      ? new Konva.Rect({ listening: false })
-      : new Konva.Arrow({ listening: false })
+    previewNode = tool === 'zone' ? new Konva.Rect({ listening: false })
+      : tool === 'circle' ? new Konva.Circle({ listening: false })
+        : new Konva.Arrow({ listening: false })
     overlayGroup.add(previewNode)
   }
 
@@ -516,6 +612,16 @@ function updatePreview() {
       y: Math.min(drawStart.y, drawCurrent.y),
       width: Math.abs(drawCurrent.x - drawStart.x),
       height: Math.abs(drawCurrent.y - drawStart.y),
+      stroke: store.selectedColor,
+      strokeWidth: store.strokeWidth,
+      fill: `${store.selectedColor}22`,
+      dash: [8, 4],
+    })
+  } else if (tool === 'circle') {
+    previewNode.setAttrs({
+      x: drawStart.x,
+      y: drawStart.y,
+      radius: Math.hypot(drawCurrent.x - drawStart.x, drawCurrent.y - drawStart.y),
       stroke: store.selectedColor,
       strokeWidth: store.strokeWidth,
       fill: `${store.selectedColor}22`,
@@ -550,6 +656,8 @@ function finishDrawing() {
     store.addElement({ type: 'line', x: drawStart.x, y: drawStart.y, x2: drawCurrent.x, y2: drawCurrent.y, color: store.selectedColor, strokeWidth: store.strokeWidth })
   } else if (store.selectedTool === 'zone') {
     store.addElement({ type: 'zone', x: Math.min(drawStart.x, drawCurrent.x), y: Math.min(drawStart.y, drawCurrent.y), x2: Math.max(drawStart.x, drawCurrent.x), y2: Math.max(drawStart.y, drawCurrent.y), color: store.selectedColor, strokeWidth: store.strokeWidth })
+  } else if (store.selectedTool === 'circle') {
+    store.addElement({ type: 'circle', x: drawStart.x, y: drawStart.y, radius: Math.hypot(dx, dy), color: store.selectedColor, strokeWidth: store.strokeWidth })
   }
 }
 
@@ -561,7 +669,7 @@ function bindStageEvents() {
     const playerAtPointer = findPlayerAt(point)
     playerPointerDown = playerAtPointer ? { id: playerAtPointer.id, point } : null
 
-    if (startArrowHandleDrag(point)) {
+    if (startHandleDrag(point)) {
       playerPointerDown = null
       event.evt?.preventDefault?.()
       return
@@ -584,6 +692,18 @@ function bindStageEvents() {
       return
     }
 
+    const zone = findZoneAt(point)
+    if (zone) {
+      store.selectElement(zone.id)
+      return
+    }
+
+    const circle = findCircleAt(point)
+    if (circle) {
+      store.selectElement(circle.id)
+      return
+    }
+
     store.clearSelection()
 
     if (store.selectedTool === 'text') {
@@ -591,7 +711,7 @@ function bindStageEvents() {
       return
     }
 
-    if (['arrow', 'line', 'zone'].includes(store.selectedTool)) {
+    if (['arrow', 'line', 'zone', 'circle'].includes(store.selectedTool)) {
       isDrawing = true
       drawStart = point
       drawCurrent = point
@@ -599,11 +719,11 @@ function bindStageEvents() {
   })
 
   stage.on('mousemove touchmove', () => {
-    if (draggedArrowHandle) {
+    if (draggedHandle) {
       const position = stage.getPointerPosition()
       if (!position || !scale.value) return
       const point = screenToVirtual(position)
-      store.updateElement(draggedArrowHandle.arrowId, draggedArrowHandle.changes(point))
+      store.updateElement(draggedHandle.elementId, draggedHandle.changes(point))
       return
     }
 
@@ -615,8 +735,8 @@ function bindStageEvents() {
   })
 
   stage.on('mouseup touchend', () => {
-    if (draggedArrowHandle) {
-      draggedArrowHandle = null
+    if (draggedHandle) {
+      draggedHandle = null
       return
     }
 
@@ -755,5 +875,31 @@ onUnmounted(() => {
 
 .player-popover input:last-child {
   width: 52px;
+}
+
+.color-popover {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  gap: 5px;
+  padding: 6px;
+  background: #ffffff;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -100%);
+}
+
+.color-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.color-swatch.active {
+  border-color: #1f2937;
+  box-shadow: 0 0 0 1px #ffffff;
 }
 </style>
