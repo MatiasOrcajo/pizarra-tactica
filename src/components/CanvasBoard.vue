@@ -298,6 +298,7 @@ function startDrawingDrag(element, point, event) {
   if (!isFreeTool() || element.type === 'player') return
   playerPopoverId.value = null
   store.selectElement(element.id)
+  store.beginHistoryBatch()
   draggedDrawing = { element: { ...element }, point }
   event.evt?.preventDefault?.()
 }
@@ -353,8 +354,12 @@ function createPlayer(el) {
   group.on('mousedown touchstart', () => {
     playerPopoverId.value = null
   })
+  group.on('dragstart', () => {
+    store.beginHistoryBatch()
+  })
   group.on('dragend', () => {
     store.updateElement(el.id, { x: group.x(), y: group.y() })
+    store.endHistoryBatch()
   })
   playerGroup.add(group)
   return group
@@ -693,6 +698,7 @@ function startHandleDrag(point) {
   if (!handle) return false
 
   draggedHandle = { elementId: element.id, changes: handle.changes }
+  store.beginHistoryBatch()
   return true
 }
 
@@ -806,7 +812,7 @@ function finishDrawing() {
       y2: endPlayer?.y ?? drawCurrent.y,
       ...(startPlayer ? { startPlayerId: startPlayer.id } : {}),
       ...(endPlayer ? { endPlayerId: endPlayer.id } : {}),
-      color: store.selectedColor,
+      color: store.getLineColor(startPlayer?.id, endPlayer?.id),
       strokeWidth: store.strokeWidth,
     })
   } else if (tool === 'zone') {
@@ -930,11 +936,13 @@ function bindStageEvents() {
   stage.on('mouseup touchend', () => {
     if (draggedHandle) {
       draggedHandle = null
+      store.endHistoryBatch()
       return
     }
 
     if (draggedDrawing) {
       draggedDrawing = null
+      store.endHistoryBatch()
       return
     }
 
@@ -996,10 +1004,16 @@ function resizeStage() {
   stage.batchDraw()
 }
 
-/** TECLADO: elimina la selección activa o la limpia, sin capturar escritura en controles HTML. */
+/** TECLADO: historial y selección, sin capturar escritura en controles HTML. */
 function onKeyDown(event) {
   if (event.target?.matches('input, textarea, select, [contenteditable="true"]')) return
-  if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedElementId !== null) {
+  if (event.ctrlKey && event.key.toLowerCase() === 'z') {
+    event.preventDefault()
+    store.undo()
+  } else if (event.ctrlKey && event.key.toLowerCase() === 'y') {
+    event.preventDefault()
+    store.redo()
+  } else if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedElementId !== null) {
     store.removeElement(store.selectedElementId)
   } else if (event.key === 'Escape') {
     store.clearSelection()

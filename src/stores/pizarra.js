@@ -6,6 +6,8 @@ import { ref, reactive, computed, watch } from 'vue'
  * (elementos + configuración de equipos).
  */
 const STORAGE_KEY = 'pizarra-tactica-autosave'
+const HISTORY_LIMIT = 100
+const NEUTRAL_LINE_COLOR = '#ffffff'
 
 /**
  * FORMATIONS — Plantillas de posiciones para 11 jugadores.
@@ -275,12 +277,99 @@ export const usePizarraStore = defineStore('pizarra', () => {
     ? elements.value.reduce((max, el) => Math.max(max, el.id ?? -1), -1) + 1
     : 0
 
+  // Historial en memoria: no se persiste para que una recarga abra el tablero guardado.
+  const undoStack = ref([])
+  const redoStack = ref([])
+  let historyBatchDepth = 0
+  let historyBatchRecorded = false
+
+  function createSnapshot() {
+    return JSON.parse(JSON.stringify({
+      elements: elements.value,
+      teams: { ...teams },
+      nextId,
+    }))
+  }
+
+  function recordHistory() {
+    if (historyBatchDepth && historyBatchRecorded) return
+    undoStack.value.push(createSnapshot())
+    if (undoStack.value.length > HISTORY_LIMIT) undoStack.value.shift()
+    redoStack.value = []
+    historyBatchRecorded = true
+  }
+
+  function beginHistoryBatch() {
+    historyBatchDepth += 1
+    if (historyBatchDepth === 1) historyBatchRecorded = false
+    recordHistory()
+  }
+
+  function endHistoryBatch() {
+    if (!historyBatchDepth) return
+    historyBatchDepth -= 1
+    if (!historyBatchDepth) historyBatchRecorded = false
+  }
+
+  function restoreSnapshot(snapshot) {
+    elements.value = snapshot.elements
+    Object.assign(teams.team1, snapshot.teams.team1)
+    Object.assign(teams.team2, snapshot.teams.team2)
+    nextId = snapshot.nextId
+    selectedElementId.value = null
+  }
+
+  function undo() {
+    const snapshot = undoStack.value.pop()
+    if (!snapshot) return
+    redoStack.value.push(createSnapshot())
+    restoreSnapshot(snapshot)
+  }
+
+  function redo() {
+    const snapshot = redoStack.value.pop()
+    if (!snapshot) return
+    undoStack.value.push(createSnapshot())
+    restoreSnapshot(snapshot)
+  }
+
   // ======================
   // CRUD DE ELEMENTOS
   // ======================
 
+  /** Determina el color de una línea según los jugadores que conecta. */
+  function getLineColor(startPlayerId, endPlayerId) {
+    const startPlayer = elements.value.find((el) => el.id === startPlayerId && el.type === 'player')
+    const endPlayer = elements.value.find((el) => el.id === endPlayerId && el.type === 'player')
+
+    if (!startPlayer || !endPlayer || startPlayer.teamId !== endPlayer.teamId) {
+      return NEUTRAL_LINE_COLOR
+    }
+
+    return startPlayer.teamId === 1
+      ? teams.team1.primaryColor
+      : startPlayer.teamId === 2
+        ? teams.team2.primaryColor
+        : NEUTRAL_LINE_COLOR
+  }
+
+  /** Recalcula los colores de líneas existentes tras un cambio de equipo o ficha. */
+  function syncLineColors() {
+    elements.value = elements.value.map((element) => element.type === 'line'
+      ? { ...element, color: getLineColor(element.startPlayerId, element.endPlayerId) }
+      : element)
+  }
+
+  // Normalize saved lines so persisted diagrams also follow the current team colors.
+  syncLineColors()
+
   function addElement(el) {
-    const element = { ...el, id: nextId++ }
+    recordHistory()
+    const element = {
+      ...el,
+      ...(el.type === 'line' ? { color: getLineColor(el.startPlayerId, el.endPlayerId) } : {}),
+      id: nextId++,
+    }
     elements.value.push(element)
     return element
   }
@@ -288,7 +377,19 @@ export const usePizarraStore = defineStore('pizarra', () => {
   function updateElement(id, changes) {
     const index = elements.value.findIndex((el) => el.id === id)
     if (index !== -1) {
-      const updated = { ...elements.value[index], ...changes }
+      recordHistory()
+      const updated = {
+        ...elements.value[index],
+        ...changes,
+        ...(elements.value[index].type === 'line'
+          ? {
+              color: getLineColor(
+                'startPlayerId' in changes ? changes.startPlayerId : elements.value[index].startPlayerId,
+                'endPlayerId' in changes ? changes.endPlayerId : elements.value[index].endPlayerId
+              ),
+            }
+          : {}),
+      }
       elements.value[index] = updated
 
       // Line endpoints linked to a player always use that player's centre.
@@ -308,11 +409,15 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
           return Object.keys(lineChanges).length ? { ...element, ...lineChanges } : element
         })
+        syncLineColors()
       }
+      if (updated.type === 'player' && 'teamId' in changes) syncLineColors()
     }
   }
 
   function removeElement(id) {
+    if (!elements.value.some((el) => el.id === id)) return
+    recordHistory()
     if (selectedElementId.value === id) selectedElementId.value = null
     elements.value = elements.value
       .filter((el) => el.id !== id)
@@ -325,6 +430,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
           ...(el.endPlayerId === id ? { endPlayerId: null } : {}),
         }
       })
+    syncLineColors()
   }
 
   function selectElement(id) {
@@ -338,6 +444,8 @@ export const usePizarraStore = defineStore('pizarra', () => {
   }
 
   function clearDrawings() {
+    if (!elements.value.some((el) => el.type !== 'player')) return
+    recordHistory()
     elements.value = elements.value.filter((el) => el.type === 'player')
     selectedElementId.value = null
   }
@@ -347,6 +455,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
    * y regenera todos los jugadores desde cero (con ids únicos).
    */
   function resetToDefaults() {
+    recordHistory()
     nextId = 0
     const def = defaultTeams()
     Object.assign(teams.team1, def.team1)
@@ -364,6 +473,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
    * actualmente, sin modificar sus nombres ni colores.
    */
   function resetToSelectedFormations() {
+    recordHistory()
     nextId = 0
     const team1Players = generateTeamPlayers(1, teams.team1, nextId)
     nextId += team1Players.length
@@ -384,6 +494,8 @@ export const usePizarraStore = defineStore('pizarra', () => {
    */
   function setTeamName(teamId, name) {
     const key = teamId === 1 ? 'team1' : 'team2'
+    if (teams[key].name === name) return
+    recordHistory()
     teams[key].name = name
   }
 
@@ -394,7 +506,10 @@ export const usePizarraStore = defineStore('pizarra', () => {
    */
   function setTeamPrimaryColor(teamId, color) {
     const key = teamId === 1 ? 'team1' : 'team2'
+    if (teams[key].primaryColor === color) return
+    recordHistory()
     teams[key].primaryColor = color
+    syncLineColors()
   }
 
   /**
@@ -404,6 +519,8 @@ export const usePizarraStore = defineStore('pizarra', () => {
    */
   function setTeamSecondaryColor(teamId, color) {
     const key = teamId === 1 ? 'team1' : 'team2'
+    if (teams[key].secondaryColor === color) return
+    recordHistory()
     teams[key].secondaryColor = color
   }
 
@@ -419,6 +536,8 @@ export const usePizarraStore = defineStore('pizarra', () => {
     if (!FORMATIONS[formation]) return
 
     const key = teamId === 1 ? 'team1' : 'team2'
+    if (teams[key].formation === formation) return
+    beginHistoryBatch()
     teams[key].formation = formation
 
     const teamPlayers = elements.value.filter(
@@ -433,7 +552,9 @@ export const usePizarraStore = defineStore('pizarra', () => {
       const newPlayers = generateTeamPlayers(teamId, teams[key], nextId)
       nextId += newPlayers.length
       elements.value = [...others, ...newPlayers]
+      syncLineColors()
       selectedElementId.value = null
+      endHistoryBatch()
       return
     }
 
@@ -452,6 +573,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
         y: position.y,
       })
     })
+    endHistoryBatch()
   }
 
   // ======================
@@ -479,7 +601,9 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
   function importFromJSON(jsonString) {
     const data = JSON.parse(jsonString)
-    if (data.elements && Array.isArray(data.elements)) {
+    if (!Array.isArray(data.elements) && !data.teams) return
+    recordHistory()
+    if (Array.isArray(data.elements)) {
       elements.value = data.elements
       nextId = elements.value.reduce((max, el) => Math.max(max, el.id || 0), 0) + 1
     }
@@ -487,6 +611,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
       if (data.teams.team1) Object.assign(teams.team1, data.teams.team1)
       if (data.teams.team2) Object.assign(teams.team2, data.teams.team2)
     }
+    syncLineColors()
   }
 
   // ======================
@@ -502,6 +627,8 @@ export const usePizarraStore = defineStore('pizarra', () => {
     elements,
     selectedElementId,
     selectedElement,
+    undoStack,
+    redoStack,
 
     // Herramienta
     selectedTool,
@@ -521,6 +648,11 @@ export const usePizarraStore = defineStore('pizarra', () => {
     clearDrawings,
     resetToDefaults,
     resetToSelectedFormations,
+    getLineColor,
+    undo,
+    redo,
+    beginHistoryBatch,
+    endHistoryBatch,
 
     // Equipos
     setTeamName,
