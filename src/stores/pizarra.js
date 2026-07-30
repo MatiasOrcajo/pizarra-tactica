@@ -242,7 +242,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
   // HERRAMIENTA ACTIVA
   // ======================
 
-  const selectedTool = ref('player')
+  const selectedTool = ref('free')
   const selectedColor = ref('#e74c3c')
   const playerNumber = ref(10)
   const playerName = ref('')
@@ -288,13 +288,43 @@ export const usePizarraStore = defineStore('pizarra', () => {
   function updateElement(id, changes) {
     const index = elements.value.findIndex((el) => el.id === id)
     if (index !== -1) {
-      elements.value[index] = { ...elements.value[index], ...changes }
+      const updated = { ...elements.value[index], ...changes }
+      elements.value[index] = updated
+
+      // Line endpoints linked to a player always use that player's centre.
+      if (updated.type === 'player' && ('x' in changes || 'y' in changes)) {
+        elements.value = elements.value.map((element) => {
+          if (element.type !== 'line') return element
+
+          const lineChanges = {}
+          if (element.startPlayerId === id) {
+            lineChanges.x = updated.x
+            lineChanges.y = updated.y
+          }
+          if (element.endPlayerId === id) {
+            lineChanges.x2 = updated.x
+            lineChanges.y2 = updated.y
+          }
+
+          return Object.keys(lineChanges).length ? { ...element, ...lineChanges } : element
+        })
+      }
     }
   }
 
   function removeElement(id) {
     if (selectedElementId.value === id) selectedElementId.value = null
-    elements.value = elements.value.filter((el) => el.id !== id)
+    elements.value = elements.value
+      .filter((el) => el.id !== id)
+      .map((el) => {
+        if (el.type !== 'line') return el
+        if (el.startPlayerId !== id && el.endPlayerId !== id) return el
+        return {
+          ...el,
+          ...(el.startPlayerId === id ? { startPlayerId: null } : {}),
+          ...(el.endPlayerId === id ? { endPlayerId: null } : {}),
+        }
+      })
   }
 
   function selectElement(id) {

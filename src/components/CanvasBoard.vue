@@ -27,6 +27,16 @@
       :aria-label="`Color ${color}`"
       @click="store.updateElement(selectedDrawing.id, { color })"
     ></button>
+    <button
+      class="delete-drawing-button"
+      aria-label="Eliminar elemento"
+      title="Eliminar elemento"
+      @click="store.removeElement(selectedDrawing.id)"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
+      </svg>
+    </button>
   </div>
 </template>
 
@@ -79,6 +89,7 @@ const LINE_WIDTH = 2
 const PITCH_GREEN = '#2e7d32'
 const DRAW_THRESHOLD = 8
 const PRESET_COLORS = ['#ffffff', '#f1c40f', '#e74c3c', '#3498db', '#2ecc71', '#9b59b6']
+const SHAPE_TOOLS = ['arrow', 'line', 'zone', 'circle', 'text']
 
 let stage = null
 let backgroundLayer = null
@@ -87,6 +98,8 @@ let elementLayer = null
 let overlayLayer = null
 let pitchGroup = null
 let elementGroup = null
+let drawingGroup = null
+let playerGroup = null
 let overlayGroup = null
 let previewNode = null
 let isDrawing = false
@@ -112,6 +125,10 @@ function getPlayerColors(el) {
 
 function isSelected(el) {
   return store.selectedElementId === el.id
+}
+
+function isFreeTool() {
+  return store.selectedTool === 'free'
 }
 
 function screenToVirtual(position) {
@@ -175,6 +192,15 @@ function findArrowAt(point) {
   return null
 }
 
+function findLineAt(point) {
+  for (let index = store.elements.length - 1; index >= 0; index -= 1) {
+    const element = store.elements[index]
+    if (element.type !== 'line') continue
+    if (pointNearSegment(point, element, { x: element.x2, y: element.y2 })) return element
+  }
+  return null
+}
+
 function findZoneAt(point) {
   for (let index = store.elements.length - 1; index >= 0; index -= 1) {
     const element = store.elements[index]
@@ -213,6 +239,7 @@ function updateSelectedPlayerNumber(event) {
 }
 
 function selectAndStartPlayerDrag(player, event) {
+  if (!isFreeTool()) return
   playerPopoverId.value = null
   store.selectElement(player.id)
 
@@ -227,11 +254,13 @@ function selectAndStartPlayerDrag(player, event) {
 
 function bindSelection(node, id) {
   node.setAttr('elementId', id)
-  node.on('mousedown touchstart', () => selectElement(id))
+  node.on('mousedown touchstart', () => {
+    if (isFreeTool()) selectElement(id)
+  })
 }
 
 function createPlayer(el) {
-  const group = new Konva.Group({ draggable: true, listening: true, elementId: el.id })
+  const group = new Konva.Group({ draggable: isFreeTool(), listening: true, elementId: el.id })
   const circle = new Konva.Circle()
   const number = new Konva.Text({ listening: false })
   const name = new Konva.Text({ listening: false })
@@ -245,7 +274,7 @@ function createPlayer(el) {
   group.on('dragend', () => {
     store.updateElement(el.id, { x: group.x(), y: group.y() })
   })
-  elementGroup.add(group)
+  playerGroup.add(group)
   return group
 }
 
@@ -255,6 +284,7 @@ function updatePlayer(group, el) {
   // Pinia puede cambiar mientras Konva está en pleno drag. No devolvemos la
   // ficha a la posición anterior hasta que el dragend persista su posición.
   if (!group.isDragging()) group.position({ x: el.x, y: el.y })
+  group.draggable(isFreeTool())
   group.getChildren()[0].setAttrs({
     x: 0,
     y: 0,
@@ -322,17 +352,33 @@ function drawArrow(ctx, el) {
 }
 
 function createArrow(el) {
-  const group = new Konva.Group()
+  const group = new Konva.Group({ draggable: isFreeTool() })
   const visual = new Konva.Shape({ listening: false })
   const hitArea = new Konva.Shape({ listening: true })
   group.add(visual, hitArea)
   bindSelection(hitArea, el.id)
-  elementGroup.add(group)
+  group.on('dragend', () => {
+    const current = store.elements.find((item) => item.id === el.id)
+    if (!current) return
+    const dx = group.x()
+    const dy = group.y()
+    if (!dx && !dy) return
+    store.updateElement(el.id, {
+      x: current.x + dx,
+      y: current.y + dy,
+      x2: current.x2 + dx,
+      y2: current.y2 + dy,
+      ...(current.cx == null ? {} : { cx: current.cx + dx, cy: current.cy + dy }),
+    })
+  })
+  drawingGroup.add(group)
   return group
 }
 
 function updateArrow(group, el) {
   const selected = isSelected(el)
+  if (!group.isDragging()) group.position({ x: 0, y: 0 })
+  group.draggable(isFreeTool())
   const visual = group.getChildren()[0]
   const hitArea = group.getChildren()[1]
   visual.setAttrs({
@@ -375,7 +421,7 @@ function updateArrow(group, el) {
 }
 
 function createZone(el) {
-  const node = new Konva.Rect({ draggable: true })
+  const node = new Konva.Rect({ draggable: isFreeTool() })
   bindSelection(node, el.id)
   node.on('dragend', () => {
     const current = store.elements.find((item) => item.id === el.id)
@@ -384,7 +430,7 @@ function createZone(el) {
     const dy = node.y() - current.y
     store.updateElement(el.id, { x: node.x(), y: node.y(), x2: current.x2 + dx, y2: current.y2 + dy })
   })
-  elementGroup.add(node)
+  drawingGroup.add(node)
   return node
 }
 
@@ -398,7 +444,7 @@ function updateZone(node, el) {
     strokeWidth: el.strokeWidth || 3,
     fill: `${el.color}22`,
     dash: [8, 4],
-    draggable: true,
+    draggable: isFreeTool(),
     shadowColor: selected ? '#ffffff' : undefined,
     shadowBlur: selected ? 6 : 0,
     shadowOffset: { x: 0, y: 0 },
@@ -406,12 +452,12 @@ function updateZone(node, el) {
 }
 
 function createCircle(el) {
-  const node = new Konva.Circle({ draggable: true })
+  const node = new Konva.Circle({ draggable: isFreeTool() })
   bindSelection(node, el.id)
   node.on('dragend', () => {
     store.updateElement(el.id, { x: node.x(), y: node.y() })
   })
-  elementGroup.add(node)
+  drawingGroup.add(node)
   return node
 }
 
@@ -424,7 +470,7 @@ function updateCircle(node, el) {
     strokeWidth: el.strokeWidth || 3,
     fill: `${el.color}22`,
     dash: [8, 4],
-    draggable: true,
+    draggable: isFreeTool(),
     shadowColor: selected ? '#ffffff' : undefined,
     shadowBlur: selected ? 6 : 0,
     shadowOffset: { x: 0, y: 0 },
@@ -432,20 +478,37 @@ function updateCircle(node, el) {
 }
 
 function createLine(el) {
-  const node = new Konva.Line()
+  const node = new Konva.Line({ draggable: isFreeTool() })
   bindSelection(node, el.id)
-  elementGroup.add(node)
+  node.on('dragend', () => {
+    const current = store.elements.find((item) => item.id === el.id)
+    if (!current) return
+    const dx = node.x()
+    const dy = node.y()
+    if (!dx && !dy) return
+    store.updateElement(el.id, {
+      x: current.x + dx,
+      y: current.y + dy,
+      x2: current.x2 + dx,
+      y2: current.y2 + dy,
+      startPlayerId: null,
+      endPlayerId: null,
+    })
+  })
+  drawingGroup.add(node)
   return node
 }
 
 function updateLine(node, el) {
   const selected = isSelected(el)
+  if (!node.isDragging()) node.position({ x: 0, y: 0 })
   node.setAttrs({
     points: [el.x, el.y, el.x2, el.y2],
     stroke: el.color,
     strokeWidth: el.strokeWidth || 3,
     hitStrokeWidth: 20,
     lineCap: 'round',
+    draggable: isFreeTool(),
     shadowColor: selected ? '#ffffff' : undefined,
     shadowBlur: selected ? 6 : 0,
     shadowOffset: { x: 0, y: 0 },
@@ -453,12 +516,12 @@ function updateLine(node, el) {
 }
 
 function createText(el) {
-  const node = new Konva.Text({ draggable: true })
+  const node = new Konva.Text({ draggable: isFreeTool() })
   bindSelection(node, el.id)
   node.on('dragend', () => {
     store.updateElement(el.id, { x: node.x(), y: node.y() })
   })
-  elementGroup.add(node)
+  drawingGroup.add(node)
   return node
 }
 
@@ -470,7 +533,7 @@ function updateText(node, el) {
     fontSize: el.fontSize || 20,
     fontStyle: 'bold',
     fill: el.color,
-    draggable: true,
+    draggable: isFreeTool(),
     shadowColor: selected ? '#ffffff' : undefined,
     shadowBlur: selected ? 6 : 0,
     shadowOffset: { x: 0, y: 0 },
@@ -532,6 +595,12 @@ function handleDefinitions(element) {
       { x: element.x2, y: element.y2, fill: '#e74c3c', changes: (point) => ({ x2: point.x, y2: point.y }) },
     ]
   }
+  if (element.type === 'line') {
+    return [
+      { x: element.x, y: element.y, changes: (point) => ({ x: point.x, y: point.y, startPlayerId: null }) },
+      { x: element.x2, y: element.y2, changes: (point) => ({ x2: point.x, y2: point.y, endPlayerId: null }) },
+    ]
+  }
   if (element.type === 'zone') {
     return [
       { x: element.x, y: element.y, changes: (point) => ({ x: point.x, y: point.y }) },
@@ -551,6 +620,7 @@ function handleDefinitions(element) {
 }
 
 function startHandleDrag(point) {
+  if (!isFreeTool()) return false
   const element = store.selectedElement
   if (!element) return false
 
@@ -650,15 +720,29 @@ function finishDrawing() {
   const dy = drawCurrent.y - drawStart.y
   if (Math.abs(dx) < DRAW_THRESHOLD && Math.abs(dy) < DRAW_THRESHOLD) return
 
-  if (store.selectedTool === 'arrow') {
+  const tool = store.selectedTool
+  if (tool === 'arrow') {
     store.addElement({ type: 'arrow', x: drawStart.x, y: drawStart.y, x2: drawCurrent.x, y2: drawCurrent.y, color: store.selectedColor, strokeWidth: store.strokeWidth || 5, dashed: false })
-  } else if (store.selectedTool === 'line') {
-    store.addElement({ type: 'line', x: drawStart.x, y: drawStart.y, x2: drawCurrent.x, y2: drawCurrent.y, color: store.selectedColor, strokeWidth: store.strokeWidth })
-  } else if (store.selectedTool === 'zone') {
+  } else if (tool === 'line') {
+    const startPlayer = findPlayerAt(drawStart)
+    const endPlayer = findPlayerAt(drawCurrent)
+    store.addElement({
+      type: 'line',
+      x: startPlayer?.x ?? drawStart.x,
+      y: startPlayer?.y ?? drawStart.y,
+      x2: endPlayer?.x ?? drawCurrent.x,
+      y2: endPlayer?.y ?? drawCurrent.y,
+      ...(startPlayer ? { startPlayerId: startPlayer.id } : {}),
+      ...(endPlayer ? { endPlayerId: endPlayer.id } : {}),
+      color: store.selectedColor,
+      strokeWidth: store.strokeWidth,
+    })
+  } else if (tool === 'zone') {
     store.addElement({ type: 'zone', x: Math.min(drawStart.x, drawCurrent.x), y: Math.min(drawStart.y, drawCurrent.y), x2: Math.max(drawStart.x, drawCurrent.x), y2: Math.max(drawStart.y, drawCurrent.y), color: store.selectedColor, strokeWidth: store.strokeWidth })
-  } else if (store.selectedTool === 'circle') {
+  } else if (tool === 'circle') {
     store.addElement({ type: 'circle', x: drawStart.x, y: drawStart.y, radius: Math.hypot(dx, dy), color: store.selectedColor, strokeWidth: store.strokeWidth })
   }
+  store.selectedTool = 'free'
 }
 
 function bindStageEvents() {
@@ -667,6 +751,23 @@ function bindStageEvents() {
     if (!position || !scale.value) return
     const point = screenToVirtual(position)
     const playerAtPointer = findPlayerAt(point)
+    playerPointerDown = null
+
+    // Drawing tools own the entire gesture, including gestures that begin over
+    // an existing element. This prevents Konva's native node drag from winning.
+    if (SHAPE_TOOLS.includes(store.selectedTool)) {
+      store.clearSelection()
+      if (store.selectedTool === 'text') {
+        store.addElement({ type: 'text', x: point.x, y: point.y, color: store.selectedColor, text: store.playerName || 'Texto', fontSize: store.fontSize })
+        store.selectedTool = 'free'
+        return
+      }
+      isDrawing = true
+      drawStart = point
+      drawCurrent = point
+      return
+    }
+
     playerPointerDown = playerAtPointer ? { id: playerAtPointer.id, point } : null
 
     if (startHandleDrag(point)) {
@@ -692,6 +793,12 @@ function bindStageEvents() {
       return
     }
 
+    const line = findLineAt(point)
+    if (line) {
+      store.selectElement(line.id)
+      return
+    }
+
     const zone = findZoneAt(point)
     if (zone) {
       store.selectElement(zone.id)
@@ -706,16 +813,6 @@ function bindStageEvents() {
 
     store.clearSelection()
 
-    if (store.selectedTool === 'text') {
-      store.addElement({ type: 'text', x: point.x, y: point.y, color: store.selectedColor, text: store.playerName || 'Texto', fontSize: store.fontSize })
-      return
-    }
-
-    if (['arrow', 'line', 'zone', 'circle'].includes(store.selectedTool)) {
-      isDrawing = true
-      drawStart = point
-      drawCurrent = point
-    }
   })
 
   stage.on('mousemove touchmove', () => {
@@ -808,6 +905,12 @@ const stopReconciliation = watch(
   { deep: true }
 )
 
+const stopToolReconciliation = watch(
+  () => store.selectedTool,
+  reconcileElements,
+  { flush: 'sync' }
+)
+
 const stopResize = watch([width, height, scale, offsetX, offsetY], resizeStage)
 
 onMounted(() => {
@@ -819,8 +922,11 @@ onMounted(() => {
   backgroundLayer.add(new Konva.Rect({ x: 0, y: 0, width: width.value, height: height.value, fill: PITCH_GREEN, listening: false }))
   pitchGroup = new Konva.Group()
   elementGroup = new Konva.Group()
+  drawingGroup = new Konva.Group()
+  playerGroup = new Konva.Group()
   overlayGroup = new Konva.Group()
   pitchLayer.add(pitchGroup)
+  elementGroup.add(drawingGroup, playerGroup)
   elementLayer.add(elementGroup)
   overlayLayer.add(overlayGroup)
   stage.add(backgroundLayer, pitchLayer, elementLayer, overlayLayer)
@@ -834,6 +940,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   stopReconciliation()
+  stopToolReconciliation()
   stopResize()
   elementNodes.clear()
   stage?.destroy()
@@ -901,5 +1008,33 @@ onUnmounted(() => {
 .color-swatch.active {
   border-color: #1f2937;
   box-shadow: 0 0 0 1px #ffffff;
+}
+
+.delete-drawing-button {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  margin-left: 2px;
+  border: 0;
+  border-left: 1px solid #d1d5db;
+  background: transparent;
+  color: #dc2626;
+  cursor: pointer;
+}
+
+.delete-drawing-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.delete-drawing-button:hover {
+  color: #991b1b;
 }
 </style>

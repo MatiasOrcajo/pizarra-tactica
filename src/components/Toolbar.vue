@@ -31,6 +31,7 @@ import { usePizarraStore } from '../stores/pizarra'
 const store = usePizarraStore()
 
 const tools = [
+  { value: 'free', label: 'Libre' },
   { value: 'arrow', label: 'Flecha' },
   { value: 'zone', label: 'Zona' },
   { value: 'circle', label: 'Círculo' },
