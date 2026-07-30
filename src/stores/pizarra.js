@@ -1,111 +1,216 @@
 import { defineStore } from 'pinia'
-import { ref, watch } from 'vue'
+import { ref, reactive, watch } from 'vue'
 
 /**
- * Clave usada en localStorage para el autoguardado de la pizarra.
- * Cada cambio en los elementos se persiste automáticamente.
+ * Clave usada en localStorage para el autoguardado completo
+ * (elementos + configuración de equipos).
  */
 const STORAGE_KEY = 'pizarra-tactica-autosave'
 
 /**
- * DEFAULT_PLAYERS — Formación inicial 4-4-2 (22 jugadores).
+ * FORMATIONS — Plantillas de posiciones para 11 jugadores.
  *
- * Se colocan 11 jugadores por equipo en el espacio virtual 1050×680:
- *   - Equipo rojo (#e74c3c): ataca hacia la derecha (portería en X=1050).
- *   - Equipo azul  (#3498db): ataca hacia la izquierda (portería en X=0).
- *   - Porteros: amarillo (#f1c40f) y verde (#2ecc71).
+ * Cada clave es el nombre de la formación (ej. '4-4-2').
+ * El valor es un array de 11 objetos { x, y } en el espacio
+ * virtual 1050×680, orientado para el Equipo 1 (ataca → derecha).
+ * El Equipo 2 espeja las coordenadas X automáticamente.
  *
- * Cada jugador es un objeto con:
- *   type:         'player'
- *   x, y:         posición en el espacio virtual
- *   playerNumber: dorsal (1-99)
- *   playerName:   nombre opcional (ej. 'POR' para el arquero)
- *   color:        color del círculo
+ * Orden del array: [0] = GK, [1..10] = jugadores de campo.
  */
-const DEFAULT_PLAYERS = [
-  // --- Equipo rojo (ataca → derecha) ---
-  { type: 'player', x: 30,  y: 340, playerNumber: 1,  playerName: 'POR', color: '#f1c40f' },
-  { type: 'player', x: 200, y: 560, playerNumber: 2,  playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 170, y: 420, playerNumber: 4,  playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 170, y: 260, playerNumber: 5,  playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 200, y: 120, playerNumber: 3,  playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 380, y: 530, playerNumber: 8,  playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 350, y: 340, playerNumber: 6,  playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 380, y: 150, playerNumber: 10, playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 550, y: 560, playerNumber: 7,  playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 570, y: 340, playerNumber: 9,  playerName: '', color: '#e74c3c' },
-  { type: 'player', x: 550, y: 120, playerNumber: 11, playerName: '', color: '#e74c3c' },
+const FORMATIONS = {
+  '4-4-2': [
+    { x: 30,  y: 340 },   // GK
+    { x: 170, y: 550 },   // RB
+    { x: 170, y: 420 },   // RCB
+    { x: 170, y: 260 },   // LCB
+    { x: 170, y: 130 },   // LB
+    { x: 360, y: 520 },   // RM
+    { x: 380, y: 380 },   // RCM
+    { x: 380, y: 300 },   // LCM
+    { x: 360, y: 160 },   // LM
+    { x: 510, y: 440 },   // RS
+    { x: 510, y: 240 },   // LS
+  ],
 
-  // --- Equipo azul (ataca ← izquierda) ---
-  { type: 'player', x: 660, y: 120, playerNumber: 7,  playerName: '', color: '#3498db' },
-  { type: 'player', x: 650, y: 340, playerNumber: 9,  playerName: '', color: '#3498db' },
-  { type: 'player', x: 660, y: 560, playerNumber: 11, playerName: '', color: '#3498db' },
-  { type: 'player', x: 830, y: 530, playerNumber: 8,  playerName: '', color: '#3498db' },
-  { type: 'player', x: 860, y: 340, playerNumber: 6,  playerName: '', color: '#3498db' },
-  { type: 'player', x: 830, y: 150, playerNumber: 10, playerName: '', color: '#3498db' },
-  { type: 'player', x: 990, y: 560, playerNumber: 2,  playerName: '', color: '#3498db' },
-  { type: 'player', x: 1020, y: 420, playerNumber: 4,  playerName: '', color: '#3498db' },
-  { type: 'player', x: 1020, y: 260, playerNumber: 5,  playerName: '', color: '#3498db' },
-  { type: 'player', x: 990, y: 120, playerNumber: 3,  playerName: '', color: '#3498db' },
-  { type: 'player', x: 1020, y: 340, playerNumber: 1,  playerName: 'POR', color: '#2ecc71' },
-]
+  '4-3-3': [
+    { x: 30,  y: 340 },   // GK
+    { x: 170, y: 550 },
+    { x: 170, y: 420 },
+    { x: 170, y: 260 },
+    { x: 170, y: 130 },
+    { x: 360, y: 480 },   // RCM
+    { x: 380, y: 340 },   // CM
+    { x: 360, y: 200 },   // LCM
+    { x: 510, y: 550 },   // RW
+    { x: 520, y: 340 },   // ST
+    { x: 510, y: 130 },   // LW
+  ],
+
+  '5-3-2': [
+    { x: 30,  y: 340 },
+    { x: 150, y: 580 },
+    { x: 150, y: 470 },
+    { x: 170, y: 340 },
+    { x: 150, y: 210 },
+    { x: 150, y: 100 },
+    { x: 330, y: 500 },
+    { x: 360, y: 340 },
+    { x: 330, y: 180 },
+    { x: 480, y: 440 },
+    { x: 480, y: 240 },
+  ],
+
+  '4-2-3-1': [
+    { x: 30,  y: 340 },
+    { x: 170, y: 550 },
+    { x: 170, y: 420 },
+    { x: 170, y: 260 },
+    { x: 170, y: 130 },
+    { x: 320, y: 440 },   // CDM-R
+    { x: 320, y: 240 },   // CDM-L
+    { x: 440, y: 520 },   // RAM
+    { x: 460, y: 340 },   // CAM
+    { x: 440, y: 160 },   // LAM
+    { x: 550, y: 340 },   // ST
+  ],
+
+  '3-5-2': [
+    { x: 30,  y: 340 },
+    { x: 150, y: 500 },
+    { x: 170, y: 340 },
+    { x: 150, y: 180 },
+    { x: 320, y: 580 },
+    { x: 350, y: 440 },
+    { x: 370, y: 340 },
+    { x: 350, y: 240 },
+    { x: 320, y: 100 },
+    { x: 500, y: 440 },
+    { x: 500, y: 240 },
+  ],
+
+  '4-1-4-1': [
+    { x: 30,  y: 340 },
+    { x: 170, y: 550 },
+    { x: 170, y: 420 },
+    { x: 170, y: 260 },
+    { x: 170, y: 130 },
+    { x: 280, y: 340 },   // CDM
+    { x: 400, y: 530 },
+    { x: 420, y: 400 },
+    { x: 420, y: 280 },
+    { x: 400, y: 150 },
+    { x: 530, y: 340 },   // ST
+  ],
+
+  '3-4-3': [
+    { x: 30,  y: 340 },
+    { x: 150, y: 500 },
+    { x: 170, y: 340 },
+    { x: 150, y: 180 },
+    { x: 340, y: 550 },
+    { x: 360, y: 400 },
+    { x: 360, y: 280 },
+    { x: 340, y: 130 },
+    { x: 510, y: 550 },
+    { x: 520, y: 340 },
+    { x: 510, y: 130 },
+  ],
+}
+
+/** Dorsales por defecto para cada posición (1 = GK, luego de campo) */
+const DEFAULT_NUMBERS = [1, 2, 4, 5, 3, 8, 6, 10, 7, 9, 11]
+
+/**
+ * Crea los 11 jugadores de un equipo según su formación actual.
+ *
+ * @param {number} teamId  — 1 para Equipo 1, 2 para Equipo 2
+ * @param {object} team    — configuración del equipo (name, colors, formation)
+ * @returns {Array<object>} — 11 objetos player con teamId
+ */
+function generateTeamPlayers(teamId, team) {
+  const positions = FORMATIONS[team.formation] || FORMATIONS['4-4-2']
+  const isTeam1 = teamId === 1
+
+  return positions.map((pos, i) => ({
+    type: 'player',
+    x: isTeam1 ? pos.x : 1050 - pos.x,   // Equipo 2: espejar X
+    y: pos.y,
+    teamId,
+    playerNumber: DEFAULT_NUMBERS[i] || i + 1,
+    playerName: i === 0 ? 'POR' : '',
+  }))
+}
+
+/** Configuración por defecto de los equipos */
+function defaultTeams() {
+  return {
+    team1: {
+      name: 'Equipo 1',
+      primaryColor: '#e74c3c',
+      secondaryColor: '#ffffff',
+      formation: '4-4-2',
+    },
+    team2: {
+      name: 'Equipo 2',
+      primaryColor: '#3498db',
+      secondaryColor: '#ffffff',
+      formation: '4-4-2',
+    },
+  }
+}
 
 /**
  * usePizarraStore — Store Pinia que gestiona todo el estado de la pizarra.
  *
- * Estado persistente (autoguardado en localStorage):
- *   elements[]     → lista de elementos (jugadores, flechas, zonas, líneas, texto)
- *
- * Estado de la herramienta activa:
- *   selectedTool   → 'player' | 'arrow' | 'line' | 'zone' | 'text'
- *   selectedColor  → color del siguiente elemento
- *   playerNumber   → dorsal del siguiente jugador
- *   playerName     → nombre del siguiente jugador
- *   fontSize       → tamaño de fuente para textos
- *   strokeWidth    → grosor de trazo para flechas/líneas/zonas
+ * Persiste en localStorage: elementos + configuración de equipos.
  */
 export const usePizarraStore = defineStore('pizarra', () => {
-  // --- Recuperar datos guardados de la sesión anterior ---
-  const saved = localStorage.getItem(STORAGE_KEY)
-  const initialElements = saved ? JSON.parse(saved) : []
+  // --- Recuperar datos guardados ---
+  const savedRaw = localStorage.getItem(STORAGE_KEY)
+  const saved = savedRaw ? JSON.parse(savedRaw) : null
 
   // ======================
-  // ESTADO REACTIVO
+  // EQUIPOS
   // ======================
 
-  /** Lista de todos los elementos sobre la cancha */
-  const elements = ref(initialElements)
+  /**
+   * Configuración de los dos equipos.
+   * Cada equipo tiene: name, primaryColor, secondaryColor, formation.
+   */
+  const teams = reactive(saved?.teams || defaultTeams())
 
-  /** Herramienta seleccionada en el toolbar */
+  // ======================
+  // ELEMENTOS
+  // ======================
+
+  /** Lista de todos los elementos sobre la cancha (jugadores, flechas, etc.) */
+  const elements = ref(saved?.elements || [])
+
+  // ======================
+  // HERRAMIENTA ACTIVA
+  // ======================
+
   const selectedTool = ref('player')
-
-  /** Color para el próximo elemento creado */
   const selectedColor = ref('#e74c3c')
-
-  /** Dorsal para el próximo jugador (por defecto 10) */
   const playerNumber = ref(10)
-
-  /** Nombre opcional para el próximo jugador */
   const playerName = ref('')
-
-  /** Tamaño de fuente para textos libres */
   const fontSize = ref(20)
-
-  /** Grosor del trazo para flechas, líneas y zonas */
   const strokeWidth = ref(3)
+
+  /** Equipo al que se asignan los jugadores creados manualmente (1 o 2) */
+  const activeTeam = ref(1)
 
   // ======================
   // AUTOGUARDADO
   // ======================
 
-  /**
-   * Cada vez que cambia la lista de elementos, se guarda
-   * automáticamente en localStorage como JSON.
-   */
   watch(
-    elements,
-    (val) => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(val))
+    [elements, teams],
+    () => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        elements: elements.value,
+        teams: { ...teams },
+      }))
     },
     { deep: true }
   )
@@ -114,11 +219,6 @@ export const usePizarraStore = defineStore('pizarra', () => {
   // GENERADOR DE IDs
   // ======================
 
-  /**
-   * Contador incremental para IDs únicos.
-   * Si hay elementos previos (cargados de localStorage), comienza
-   * desde el máximo ID encontrado + 1. Si no, arranca en 100.
-   */
   let nextId = elements.value.length
     ? elements.value.reduce((max, el) => Math.max(max, el.id || 0), 0) + 1
     : 100
@@ -127,14 +227,12 @@ export const usePizarraStore = defineStore('pizarra', () => {
   // CRUD DE ELEMENTOS
   // ======================
 
-  /** Agrega un nuevo elemento a la pizarra y devuelve el elemento creado. */
   function addElement(el) {
     const element = { ...el, id: nextId++ }
     elements.value.push(element)
     return element
   }
 
-  /** Actualiza propiedades de un elemento existente (por ID). */
   function updateElement(id, changes) {
     const index = elements.value.findIndex((el) => el.id === id)
     if (index !== -1) {
@@ -142,38 +240,115 @@ export const usePizarraStore = defineStore('pizarra', () => {
     }
   }
 
-  /** Elimina un elemento por su ID. */
   function removeElement(id) {
     elements.value = elements.value.filter((el) => el.id !== id)
   }
 
-  /** Borra todos los elementos de la pizarra. */
   function clearAll() {
     elements.value = []
   }
 
   /**
-   * Restaura la formación por defecto (DEFAULT_PLAYERS).
-   * Reinicia el contador de IDs a 100.
+   * Restaura ambos equipos a la configuración por defecto
+   * y regenera todos los jugadores desde cero.
    */
   function resetToDefaults() {
     nextId = 100
-    elements.value = DEFAULT_PLAYERS.map((p, i) => ({ ...p, id: i }))
+    const def = defaultTeams()
+    Object.assign(teams.team1, def.team1)
+    Object.assign(teams.team2, def.team2)
+    elements.value = [
+      ...generateTeamPlayers(1, teams.team1),
+      ...generateTeamPlayers(2, teams.team2),
+    ]
+  }
+
+  // ======================
+  // GESTIÓN DE EQUIPOS
+  // ======================
+
+  /**
+   * Actualiza el nombre de un equipo.
+   * @param {1|2} teamId
+   * @param {string} name
+   */
+  function setTeamName(teamId, name) {
+    const key = teamId === 1 ? 'team1' : 'team2'
+    teams[key].name = name
+  }
+
+  /**
+   * Cambia el color primario (fondo de la ficha) de un equipo.
+   * @param {1|2} teamId
+   * @param {string} color — hex (#rrggbb)
+   */
+  function setTeamPrimaryColor(teamId, color) {
+    const key = teamId === 1 ? 'team1' : 'team2'
+    teams[key].primaryColor = color
+  }
+
+  /**
+   * Cambia el color secundario (número de la camiseta) de un equipo.
+   * @param {1|2} teamId
+   * @param {string} color — hex (#rrggbb)
+   */
+  function setTeamSecondaryColor(teamId, color) {
+    const key = teamId === 1 ? 'team1' : 'team2'
+    teams[key].secondaryColor = color
+  }
+
+  /**
+   * Cambia la formación táctica de un equipo.
+   * Reposiciona los jugadores existentes de ese equipo según la nueva formación.
+   * Si no hay exactamente 11 jugadores, regenera el equipo completo.
+   *
+   * @param {1|2} teamId
+   * @param {string} formation — clave en FORMATIONS (ej. '4-3-3')
+   */
+  function setTeamFormation(teamId, formation) {
+    if (!FORMATIONS[formation]) return
+
+    const key = teamId === 1 ? 'team1' : 'team2'
+    teams[key].formation = formation
+
+    const teamPlayers = elements.value.filter(
+      (el) => el.type === 'player' && el.teamId === teamId
+    )
+
+    // Si no hay 11 jugadores del equipo, los regeneramos
+    if (teamPlayers.length < 11) {
+      const others = elements.value.filter(
+        (el) => !(el.type === 'player' && el.teamId === teamId)
+      )
+      const newPlayers = generateTeamPlayers(teamId, teams[key])
+      elements.value = [...others, ...newPlayers]
+      return
+    }
+
+    // Reposicionar los 11 jugadores existentes según la formación
+    const positions = FORMATIONS[formation]
+    const isTeam1 = teamId === 1
+    const sorted = [...teamPlayers].sort((a, b) => a.id - b.id).slice(0, 11)
+
+    sorted.forEach((player, i) => {
+      const pos = positions[i] || positions[0]
+      updateElement(player.id, {
+        x: isTeam1 ? pos.x : 1050 - pos.x,
+        y: pos.y,
+      })
+    })
   }
 
   // ======================
   // EXPORTAR / IMPORTAR
   // ======================
 
-  /**
-   * Exporta la pizarra actual como archivo JSON descargable.
-   * Incluye versión, fecha de exportación y la lista de elementos.
-   */
   function exportToJSON() {
     const data = {
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       elements: elements.value,
+      teams: { ...teams },
     }
     const json = JSON.stringify(data, null, 2)
     const blob = new Blob([json], { type: 'application/json' })
@@ -187,15 +362,15 @@ export const usePizarraStore = defineStore('pizarra', () => {
     URL.revokeObjectURL(url)
   }
 
-  /**
-   * Importa elementos desde un string JSON.
-   * Reemplaza completamente los elementos actuales.
-   */
   function importFromJSON(jsonString) {
     const data = JSON.parse(jsonString)
     if (data.elements && Array.isArray(data.elements)) {
       elements.value = data.elements
       nextId = elements.value.reduce((max, el) => Math.max(max, el.id || 0), 0) + 1
+    }
+    if (data.teams) {
+      if (data.teams.team1) Object.assign(teams.team1, data.teams.team1)
+      if (data.teams.team2) Object.assign(teams.team2, data.teams.team2)
     }
   }
 
@@ -204,18 +379,37 @@ export const usePizarraStore = defineStore('pizarra', () => {
   // ======================
 
   return {
+    // Equipos
+    teams,
+    formations: FORMATIONS,
+
+    // Elementos
     elements,
+
+    // Herramienta
     selectedTool,
     selectedColor,
     playerNumber,
     playerName,
     fontSize,
     strokeWidth,
+    activeTeam,
+
+    // CRUD
     addElement,
     updateElement,
     removeElement,
     clearAll,
     resetToDefaults,
+
+    // Equipos
+    setTeamName,
+    setTeamPrimaryColor,
+    setTeamSecondaryColor,
+    setTeamFormation,
+    generateTeamPlayers,
+
+    // Persistencia
     exportToJSON,
     importFromJSON,
   }

@@ -397,7 +397,7 @@ function handleStageClick(e) {
       type: 'player',
       x: v.x,
       y: v.y,
-      color: store.selectedColor,
+      teamId: store.activeTeam,
       playerNumber: store.playerNumber,
       playerName: store.playerName,
     })
@@ -575,25 +575,50 @@ const previewRectConfig = computed(() => ({
 // CONFIGS DE RENDERIZADO DE ELEMENTOS
 // ====================================================
 
-/** Círculo del jugador: radio 18 px, color según el equipo, borde al seleccionar. */
+/**
+ * Obtiene los colores de un jugador según su equipo.
+ * Si el jugador no tiene teamId, usa sus colores propios (compatibilidad).
+ */
+function getPlayerColors(el) {
+  if (el.teamId === 1 && store.teams.team1) {
+    return {
+      primary: store.teams.team1.primaryColor,
+      secondary: store.teams.team1.secondaryColor,
+    }
+  }
+  if (el.teamId === 2 && store.teams.team2) {
+    return {
+      primary: store.teams.team2.primaryColor,
+      secondary: store.teams.team2.secondaryColor,
+    }
+  }
+  return {
+    primary: el.color || '#e74c3c',
+    secondary: '#ffffff',
+  }
+}
+
+/** Círculo del jugador: radio 18 px, color primario del equipo, borde al seleccionar. */
 function playerCircleConfig(el) {
   const isSelected = selectedElementId.value === el.id
+  const colors = getPlayerColors(el)
   return {
     x: 0, y: 0, radius: 18,
-    fill: el.color,
+    fill: colors.primary,
     stroke: isSelected ? '#fff' : 'rgba(0,0,0,0.35)',
     strokeWidth: isSelected ? 3 : 2,
     listening: true,
   }
 }
 
-/** Número del jugador (centrado dentro del círculo). */
+/** Número del jugador (centrado dentro del círculo). Usa el color secundario del equipo. */
 function playerTextConfig(el) {
+  const colors = getPlayerColors(el)
   return {
     x: -10, y: -10, width: 20, height: 20,
     text: String(el.playerNumber),
     fontSize: 15, fontStyle: 'bold',
-    fill: '#fff', align: 'center', verticalAlign: 'middle',
+    fill: colors.secondary, align: 'center', verticalAlign: 'middle',
     listening: false,
   }
 }
