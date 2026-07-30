@@ -543,6 +543,28 @@ export const usePizarraStore = defineStore('pizarra', () => {
   }
 
   /**
+   * Restablecimiento de fábrica completo.
+   * Elimina localStorage y restaura todo el estado a valores originales:
+   * sin nombres, sin dorsales personalizados, colores por defecto.
+   */
+  function factoryReset() {
+    localStorage.removeItem(STORAGE_KEY)
+    undoStack.value = []
+    redoStack.value = []
+    mirrorHorizontal.value = false
+    selectedElementId.value = null
+    nextId = 0
+    const def = defaultTeams()
+    Object.assign(teams.team1, def.team1)
+    Object.assign(teams.team2, def.team2)
+    const t1 = generateTeamPlayers(1, teams.team1, nextId)
+    nextId += t1.length
+    const t2 = generateTeamPlayers(2, teams.team2, nextId)
+    nextId += t2.length
+    elements.value = [...t1, ...t2, createBall(nextId++)]
+  }
+
+  /**
    * Restaura las posiciones de jugadores a las formaciones elegidas
    * actualmente, conservando nombres y números de camiseta existentes.
    *
@@ -762,6 +784,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     clearSelection,
     clearDrawings,
     resetToDefaults,
+    factoryReset,
     resetToSelectedFormations,
     getLineColor,
     undo,

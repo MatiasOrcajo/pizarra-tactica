@@ -8,6 +8,7 @@
         <input type="file" accept=".json" @change="handleImport" />
       </label>
       <button class="action-button danger" @click="clearDrawings">Limpiar todo</button>
+      <button class="action-button danger" @click="factoryReset">Restablecer fábrica</button>
       <button class="action-button" @click="restoreFormations">Reestablecer tácticas</button>
       <button
         :class="['action-button', { active: store.showTacticalZones }]"
@@ -65,6 +66,12 @@ function handleImport(event) {
 function clearDrawings() {
   if (confirm('Se eliminarán todas las anotaciones dibujadas.')) {
     store.clearDrawings()
+  }
+}
+
+function factoryReset() {
+  if (confirm('Se borrará todo: nombres, números, colores y dibujos. ¿Continuar?')) {
+    store.factoryReset()
   }
 }
 
