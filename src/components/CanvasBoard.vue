@@ -325,6 +325,8 @@ function drawingDragChanges(element, dx, dy) {
       x2: element.x2 + dx,
       y2: element.y2 + dy,
       ...(element.cx == null ? {} : { cx: element.cx + dx, cy: element.cy + dy }),
+      startPlayerId: null,
+      endPlayerId: null,
     }
   }
   if (element.type === 'line') {
@@ -715,9 +717,9 @@ function handleDefinitions(element) {
     const middleX = element.cx ?? (element.x + element.x2) / 2
     const middleY = element.cy ?? (element.y + element.y2) / 2
     return [
-      { x: element.x, y: element.y, fill: '#4a6cf7', changes: (point) => ({ x: point.x, y: point.y }) },
+      { x: element.x, y: element.y, fill: '#4a6cf7', changes: (point) => ({ x: point.x, y: point.y, startPlayerId: null }) },
       { x: middleX, y: middleY, fill: '#f1c40f', changes: (point) => ({ cx: point.x, cy: point.y }) },
-      { x: element.x2, y: element.y2, fill: '#e74c3c', changes: (point) => ({ x2: point.x, y2: point.y }) },
+      { x: element.x2, y: element.y2, fill: '#e74c3c', changes: (point) => ({ x2: point.x, y2: point.y, endPlayerId: null }) },
     ]
   }
   if (element.type === 'line') {
@@ -856,7 +858,20 @@ function finishDrawing() {
 
   const tool = store.selectedTool
   if (tool === 'arrow') {
-    store.addElement({ type: 'arrow', x: drawStart.x, y: drawStart.y, x2: drawCurrent.x, y2: drawCurrent.y, color: store.selectedColor, strokeWidth: store.strokeWidth || 5, dashed: false })
+    const startPlayer = findPlayerAt(drawStart)
+    const endPlayer = findPlayerAt(drawCurrent)
+    store.addElement({
+      type: 'arrow',
+      x: startPlayer?.x ?? drawStart.x,
+      y: startPlayer?.y ?? drawStart.y,
+      x2: endPlayer?.x ?? drawCurrent.x,
+      y2: endPlayer?.y ?? drawCurrent.y,
+      ...(startPlayer ? { startPlayerId: startPlayer.id } : {}),
+      ...(endPlayer ? { endPlayerId: endPlayer.id } : {}),
+      color: store.selectedColor,
+      strokeWidth: store.strokeWidth || 5,
+      dashed: false,
+    })
   } else if (tool === 'line') {
     const startPlayer = findPlayerAt(drawStart)
     const endPlayer = findPlayerAt(drawCurrent)

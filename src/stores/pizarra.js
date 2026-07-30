@@ -465,22 +465,22 @@ export const usePizarraStore = defineStore('pizarra', () => {
       }
       elements.value[index] = updated
 
-      // Line endpoints linked to a player always use that player's centre.
+      // Los extremos de líneas y flechas anclados a un jugador siempre usan su centro.
       if (updated.type === 'player' && ('x' in changes || 'y' in changes)) {
         elements.value = elements.value.map((element) => {
-          if (element.type !== 'line') return element
+          if (element.type !== 'line' && element.type !== 'arrow') return element
 
-          const lineChanges = {}
+          const endpointChanges = {}
           if (element.startPlayerId === id) {
-            lineChanges.x = updated.x
-            lineChanges.y = updated.y
+            endpointChanges.x = updated.x
+            endpointChanges.y = updated.y
           }
           if (element.endPlayerId === id) {
-            lineChanges.x2 = updated.x
-            lineChanges.y2 = updated.y
+            endpointChanges.x2 = updated.x
+            endpointChanges.y2 = updated.y
           }
 
-          return Object.keys(lineChanges).length ? { ...element, ...lineChanges } : element
+          return Object.keys(endpointChanges).length ? { ...element, ...endpointChanges } : element
         })
         syncLineColors()
       }
@@ -495,7 +495,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     elements.value = elements.value
       .filter((el) => el.id !== id)
       .map((el) => {
-        if (el.type !== 'line') return el
+        if (el.type !== 'line' && el.type !== 'arrow') return el
         if (el.startPlayerId !== id && el.endPlayerId !== id) return el
         return {
           ...el,
