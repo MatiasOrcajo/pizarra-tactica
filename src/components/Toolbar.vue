@@ -101,6 +101,80 @@
       </div>
     </div>
 
+    <!-- ========== EDICIÓN INLINE (elemento seleccionado) ========== -->
+    <div v-if="store.selectedElement" class="tool-section edit-section">
+      <label class="section-label edit-label">
+        {{ store.selectedElement.type === 'player' ? 'Editando jugador' : store.selectedElement.type === 'arrow' ? 'Editando flecha' : 'Editando' }}
+      </label>
+
+      <!-- Editor de jugador seleccionado -->
+      <template v-if="store.selectedElement.type === 'player'">
+        <div class="input-group">
+          <input
+            type="number"
+            :value="store.selectedElement.playerNumber"
+            min="1" max="99"
+            class="input"
+            placeholder="N°"
+            @input="updateSelected({ playerNumber: Number($event.target.value) })"
+          />
+          <input
+            type="text"
+            :value="store.selectedElement.playerName"
+            class="input"
+            placeholder="Nombre"
+            @input="updateSelected({ playerName: $event.target.value })"
+          />
+        </div>
+        <div class="input-group" style="margin-top: 4px;">
+          <select
+            :value="store.selectedElement.teamId"
+            class="formation-select"
+            style="flex:1"
+            @change="updateSelected({ teamId: Number($event.target.value) })"
+          >
+            <option :value="1">{{ store.teams.team1.name }}</option>
+            <option :value="2">{{ store.teams.team2.name }}</option>
+          </select>
+        </div>
+      </template>
+
+      <!-- Editor de flecha seleccionada -->
+      <template v-if="store.selectedElement.type === 'arrow'">
+        <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+          <label style="font-size: 11px; color: #aaa; white-space: nowrap;">Estilo:</label>
+          <button
+            :class="['style-toggle-btn', { active: !store.selectedElement.dashed }]"
+            @click="updateSelected({ dashed: false })"
+          >Normal</button>
+          <button
+            :class="['style-toggle-btn', { active: store.selectedElement.dashed }]"
+            @click="updateSelected({ dashed: true })"
+          >Dashed</button>
+        </div>
+        <div style="display: flex; gap: 6px; align-items: center;">
+          <label style="font-size: 11px; color: #aaa; white-space: nowrap;">Grosor:</label>
+          <input
+            type="range"
+            :value="store.selectedElement.strokeWidth || 3"
+            min="1" max="10"
+            class="slider"
+            style="flex:1"
+            @input="updateSelected({ strokeWidth: Number($event.target.value) })"
+          />
+          <span style="font-size: 10px; color: #999;">{{ store.selectedElement.strokeWidth || 3 }}px</span>
+        </div>
+        <div style="margin-top: 4px; font-size: 10px; color: #777;">
+          Arrastrá los puntos azul/rojo para cambiar dirección.<br />
+          Arrastrá el punto amarillo para curvar.
+        </div>
+      </template>
+
+      <button class="action-btn" style="margin-top: 6px;" @click="store.clearSelection()">
+        Cerrar edición
+      </button>
+    </div>
+
     <!-- ========== SELECTOR DE HERRAMIENTA ========== -->
     <div class="tool-section">
       <label class="section-label">Herramienta</label>
@@ -287,6 +361,13 @@ function confirmClear() {
   if (store.elements.length === 0) return
   if (confirm('¿Borrar todos los elementos de la pizarra?')) {
     store.clearAll()
+  }
+}
+
+/** Actualiza propiedades del elemento seleccionado */
+function updateSelected(changes) {
+  if (store.selectedElementId !== null && store.selectedElementId !== undefined) {
+    store.updateElement(store.selectedElementId, changes)
   }
 }
 </script>
@@ -609,6 +690,41 @@ function confirmClear() {
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+/* ===================== */
+/* EDICIÓN INLINE         */
+/* ===================== */
+
+.edit-section {
+  background: rgba(74, 108, 247, 0.12);
+}
+
+.edit-label {
+  color: #4a6cf7 !important;
+}
+
+.style-toggle-btn {
+  flex: 1;
+  padding: 3px 6px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #2a2a38;
+  color: #999;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.style-toggle-btn:hover {
+  background: #3a3a4a;
+}
+
+.style-toggle-btn.active {
+  background: #4a6cf7;
+  border-color: #4a6cf7;
+  color: #fff;
 }
 
 /* ===================== */

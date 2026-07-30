@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 
 /**
  * Clave usada en localStorage para el autoguardado completo
@@ -122,16 +122,19 @@ const DEFAULT_NUMBERS = [1, 2, 4, 5, 3, 8, 6, 10, 7, 9, 11]
 
 /**
  * Crea los 11 jugadores de un equipo según su formación actual.
+ * Cada jugador recibe un id único a partir de startId.
  *
  * @param {number} teamId  — 1 para Equipo 1, 2 para Equipo 2
  * @param {object} team    — configuración del equipo (name, colors, formation)
- * @returns {Array<object>} — 11 objetos player con teamId
+ * @param {number} startId — primer id a asignar (se usa startId .. startId+10)
+ * @returns {Array<object>} — 11 objetos player con id y teamId
  */
-function generateTeamPlayers(teamId, team) {
+function generateTeamPlayers(teamId, team, startId = 0) {
   const positions = FORMATIONS[team.formation] || FORMATIONS['4-4-2']
   const isTeam1 = teamId === 1
 
   return positions.map((pos, i) => ({
+    id: startId + i,
     type: 'player',
     x: isTeam1 ? pos.x : 1050 - pos.x,   // Equipo 2: espejar X
     y: pos.y,
@@ -186,6 +189,35 @@ export const usePizarraStore = defineStore('pizarra', () => {
   /** Lista de todos los elementos sobre la cancha (jugadores, flechas, etc.) */
   const elements = ref(saved?.elements || [])
 
+  // Migración: asegurar que TODOS los elementos tengan un id numérico único.
+  // Sin esto, jugadores cargados de formaciones antiguas quedan con id=undefined
+  // y al seleccionar uno se marcan TODOS (undefined === undefined).
+  {
+    let maxId = -1
+    elements.value = elements.value.map((el, i) => {
+      if (el.id == null || Number.isNaN(Number(el.id))) {
+        return { ...el, id: i }
+      }
+      maxId = Math.max(maxId, Number(el.id))
+      return el
+    })
+    // Si hubo colisiones de id (varios sin id que recibieron i), reasignamos todos
+    const ids = elements.value.map((el) => el.id)
+    const hasDupes = ids.length !== new Set(ids).size
+    if (hasDupes) {
+      elements.value = elements.value.map((el, i) => ({ ...el, id: i }))
+    }
+  }
+
+  /** ID del elemento actualmente seleccionado (null = ninguno) */
+  const selectedElementId = ref(null)
+
+  /** Elemento seleccionado (computado desde elements + selectedElementId) */
+  const selectedElement = computed(() => {
+    if (selectedElementId.value === null || selectedElementId.value === undefined) return null
+    return elements.value.find((el) => el.id === selectedElementId.value) || null
+  })
+
   // ======================
   // HERRAMIENTA ACTIVA
   // ======================
@@ -195,7 +227,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
   const playerNumber = ref(10)
   const playerName = ref('')
   const fontSize = ref(20)
-  const strokeWidth = ref(3)
+  const strokeWidth = ref(4)
 
   /** Equipo al que se asignan los jugadores creados manualmente (1 o 2) */
   const activeTeam = ref(1)
@@ -220,8 +252,8 @@ export const usePizarraStore = defineStore('pizarra', () => {
   // ======================
 
   let nextId = elements.value.length
-    ? elements.value.reduce((max, el) => Math.max(max, el.id || 0), 0) + 1
-    : 100
+    ? elements.value.reduce((max, el) => Math.max(max, el.id ?? -1), -1) + 1
+    : 0
 
   // ======================
   // CRUD DE ELEMENTOS
@@ -241,7 +273,18 @@ export const usePizarraStore = defineStore('pizarra', () => {
   }
 
   function removeElement(id) {
+    if (selectedElementId.value === id) selectedElementId.value = null
     elements.value = elements.value.filter((el) => el.id !== id)
+  }
+
+  function selectElement(id) {
+    // Solo acepta ids definidos (evita seleccionar con undefined)
+    if (id === null || id === undefined) return
+    selectedElementId.value = id
+  }
+
+  function clearSelection() {
+    selectedElementId.value = null
   }
 
   function clearAll() {
@@ -250,17 +293,19 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
   /**
    * Restaura ambos equipos a la configuración por defecto
-   * y regenera todos los jugadores desde cero.
+   * y regenera todos los jugadores desde cero (con ids únicos).
    */
   function resetToDefaults() {
-    nextId = 100
+    nextId = 0
     const def = defaultTeams()
     Object.assign(teams.team1, def.team1)
     Object.assign(teams.team2, def.team2)
-    elements.value = [
-      ...generateTeamPlayers(1, teams.team1),
-      ...generateTeamPlayers(2, teams.team2),
-    ]
+    const t1 = generateTeamPlayers(1, teams.team1, nextId)
+    nextId += t1.length
+    const t2 = generateTeamPlayers(2, teams.team2, nextId)
+    nextId += t2.length
+    elements.value = [...t1, ...t2]
+    selectedElementId.value = null
   }
 
   // ======================
@@ -315,20 +360,25 @@ export const usePizarraStore = defineStore('pizarra', () => {
       (el) => el.type === 'player' && el.teamId === teamId
     )
 
-    // Si no hay 11 jugadores del equipo, los regeneramos
+    // Si no hay 11 jugadores del equipo, los regeneramos con ids nuevos
     if (teamPlayers.length < 11) {
       const others = elements.value.filter(
         (el) => !(el.type === 'player' && el.teamId === teamId)
       )
-      const newPlayers = generateTeamPlayers(teamId, teams[key])
+      const newPlayers = generateTeamPlayers(teamId, teams[key], nextId)
+      nextId += newPlayers.length
       elements.value = [...others, ...newPlayers]
+      selectedElementId.value = null
       return
     }
 
     // Reposicionar los 11 jugadores existentes según la formación
     const positions = FORMATIONS[formation]
     const isTeam1 = teamId === 1
-    const sorted = [...teamPlayers].sort((a, b) => a.id - b.id).slice(0, 11)
+    const sorted = [...teamPlayers]
+      .filter((p) => p.id != null)
+      .sort((a, b) => a.id - b.id)
+      .slice(0, 11)
 
     sorted.forEach((player, i) => {
       const pos = positions[i] || positions[0]
@@ -385,6 +435,8 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
     // Elementos
     elements,
+    selectedElementId,
+    selectedElement,
 
     // Herramienta
     selectedTool,
@@ -399,6 +451,8 @@ export const usePizarraStore = defineStore('pizarra', () => {
     addElement,
     updateElement,
     removeElement,
+    selectElement,
+    clearSelection,
     clearAll,
     resetToDefaults,
 

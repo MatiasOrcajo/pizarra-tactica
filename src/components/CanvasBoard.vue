@@ -1,694 +1,577 @@
 <template>
-  <!--
-    CanvasBoard.vue — Componente principal del tablero táctico.
-
-    Renderiza una cancha de fútbol con todas sus marcaciones oficiales
-    (escala 1 m = 10 px) sobre un lienzo Konva escalable, y permite
-    añadir jugadores, flechas, líneas, zonas y texto mediante el store.
-  -->
-  <div ref="containerRef" class="canvas-container">
-    <!-- Konva Stage: ocupa todo el viewport, se redimensiona automáticamente -->
-    <v-stage
-      ref="stageRef"
-      :config="stageConfig"
-      @mousedown="handleMouseDown"
-      @mousemove="handleMouseMove"
-      @mouseup="handleMouseUp"
-      @click="handleStageClick"
-    >
-      <v-layer>
-        <!-- Fondo verde sólido (detrás de la cancha) -->
-        <v-rect :config="bgConfig" />
-
-        <!-- Grupo escalado y centrado que contiene toda la cancha -->
-        <v-group :config="groupConfig">
-          <!-- ========== FRANJAS DE CÉSPED ========== -->
-          <template v-for="s in grassStripes" :key="s.id">
-            <v-rect :config="s" />
-          </template>
-
-          <!-- ========== BORDE DEL CAMPO ========== -->
-          <v-rect :config="pitchBoundaryConfig" />
-
-          <!-- ========== LÍNEA CENTRAL ========== -->
-          <v-line :config="centerLineConfig" />
-
-          <!-- ========== CÍRCULO Y PUNTO CENTRAL ========== -->
-          <v-circle :config="centerCircleConfig" />
-          <v-circle :config="centerSpotConfig" />
-
-          <!-- ========== ÁREAS GRANDES (16.5 m) ========== -->
-          <v-rect :config="leftPenaltyAreaConfig" />
-          <v-rect :config="rightPenaltyAreaConfig" />
-
-          <!-- ========== ÁREAS CHICAS (5.5 m) ========== -->
-          <v-rect :config="leftGoalAreaConfig" />
-          <v-rect :config="rightGoalAreaConfig" />
-
-          <!-- ========== PORTERÍAS ========== -->
-          <v-rect :config="leftGoalConfig" />
-          <v-rect :config="rightGoalConfig" />
-
-          <!-- ========== MEDIALUNA (ARCO PENAL, 9.15 m) ========== -->
-          <v-arc :config="leftPenaltyArcConfig" />
-          <v-arc :config="rightPenaltyArcConfig" />
-
-          <!-- ========== PUNTOS PENALES (11 m) ========== -->
-          <v-circle :config="leftPenaltySpotConfig" />
-          <v-circle :config="rightPenaltySpotConfig" />
-
-          <!-- ========== ARCOS DE CÓRNER (1 m) ========== -->
-          <v-arc v-for="c in cornerConfigs" :key="c.id" :config="c" />
-
-          <!-- ============================================
-               ELEMENTOS DEL STORE (jugadores, flechas, etc.)
-               ============================================ -->
-          <template v-for="el in store.elements" :key="el.id">
-            <!-- Jugador: círculo con número y nombre -->
-            <v-group
-              v-if="el.type === 'player'"
-              :config="{ x: el.x, y: el.y, draggable: true, name: 'player-group' }"
-              @dragend="handlePlayerDrag(el, $event)"
-              @click="selectElement(el.id)"
-              @tap="selectElement(el.id)"
-            >
-              <v-circle :config="playerCircleConfig(el)" />
-              <v-text :config="playerTextConfig(el)" />
-            </v-group>
-
-            <!-- Flecha (pase / dirección) -->
-            <v-arrow
-              v-else-if="el.type === 'arrow'"
-              :config="arrowConfig(el)"
-              @click="selectElement(el.id)"
-              @tap="selectElement(el.id)"
-            />
-
-            <!-- Zona (rectángulo punteado) -->
-            <v-rect
-              v-else-if="el.type === 'zone'"
-              :config="zoneConfig(el)"
-              @dragend="handleZoneDrag(el, $event)"
-              @click="selectElement(el.id)"
-              @tap="selectElement(el.id)"
-            />
-
-            <!-- Línea recta -->
-            <v-line
-              v-else-if="el.type === 'line'"
-              :config="lineConfig(el)"
-              @click="selectElement(el.id)"
-              @tap="selectElement(el.id)"
-            />
-
-            <!-- Texto libre -->
-            <v-text
-              v-else-if="el.type === 'text'"
-              :config="textElConfig(el)"
-              @dragend="handleTextDrag(el, $event)"
-              @click="selectElement(el.id)"
-              @tap="selectElement(el.id)"
-            />
-          </template>
-
-          <!-- ========== VISTA PREVIA DE DIBUJO ========== -->
-          <v-arrow
-            v-if="isDrawing && (store.selectedTool === 'arrow' || store.selectedTool === 'line')"
-            :config="previewArrowConfig"
-          />
-          <v-rect
-            v-if="isDrawing && store.selectedTool === 'zone'"
-            :config="previewRectConfig"
-          />
-        </v-group>
-      </v-layer>
-    </v-stage>
-  </div>
+  <div ref="containerRef" class="canvas-container"></div>
 </template>
 
 <script setup>
-/**
- * CanvasBoard.vue (script) — Lógica del tablero táctico.
- *
- * Responsabilidades:
- *   1. Configurar el Stage y el Group escalado de Konva.
- *   2. Definir todas las marcaciones de la cancha como computed().
- *   3. Manejar los eventos del mouse para crear y arrastrar elementos.
- *   4. Generar los :config de cada tipo de elemento del store.
- */
-
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
+import Konva from 'konva'
 import { usePizarraStore } from '../stores/pizarra'
 import { useCanvasResize } from '../composables/useCanvasResize'
-import { useFootballPitch, VIRTUAL_W, VIRTUAL_H } from '../composables/useFootballPitch'
+import { useFootballPitch, VIRTUAL_H, VIRTUAL_W } from '../composables/useFootballPitch'
 
-// ========================
-// STORE Y REFERENCIAS
-// ========================
-
-/** Store Pinia con todos los elementos y herramientas */
 const store = usePizarraStore()
-
-/** Referencia al div contenedor (para medir su tamaño real) */
 const containerRef = ref(null)
-/** Referencia al Stage de Konva (para obtener coordenadas del puntero) */
-const stageRef = ref(null)
-
-/** Tamaño real del contenedor (reactivo, vía ResizeObserver) */
 const { width, height } = useCanvasResize(containerRef)
-/** Escala uniforme, offsets y datos de marcaciones */
 const { scale, offsetX, offsetY, pitchMarkings } = useFootballPitch(width, height)
 
-// ========================
-// ESTADO LOCAL DEL LIENZO
-// ========================
-
-/** ID del elemento actualmente seleccionado (null = ninguno) */
-const selectedElementId = ref(null)
-/** Indica si se está dibujando una flecha / línea / zona */
-const isDrawing = ref(false)
-/** Punto de inicio del dibujo (en coordenadas virtuales) */
-const drawStart = ref({ x: 0, y: 0 })
-/** Punto actual del cursor durante el dibujo (coordenadas virtuales) */
-const drawCurrent = ref({ x: 0, y: 0 })
-
-// ========================
-// CONSTANTES DE ESTILO
-// ========================
-
-/** Color de todas las líneas de la cancha */
 const LINE_COLOR = '#ffffff'
-/** Grosor de las líneas (px) */
 const LINE_WIDTH = 2
-/** Color de fondo verde oscuro de la cancha */
 const PITCH_GREEN = '#2e7d32'
+const DRAW_THRESHOLD = 8
 
-// ====================================================
-// CONFIGS DEL STAGE, FONDO Y GRUPO ESCALADO
-// ====================================================
+let stage = null
+let backgroundLayer = null
+let pitchLayer = null
+let elementLayer = null
+let overlayLayer = null
+let pitchGroup = null
+let elementGroup = null
+let overlayGroup = null
+let previewNode = null
+let isDrawing = false
+let drawStart = null
+let drawCurrent = null
+let handleArrowId = null
+let arrowHandles = []
 
-/** Stage de Konva: ocupa todo el viewport */
-const stageConfig = computed(() => ({
-  width: width.value,
-  height: height.value,
-}))
+// Cada elemento del store conserva su nodo Konva durante toda su vida.
+const elementNodes = new Map()
 
-/** Fondo sólido verde (cubre todo el Stage, incluso fuera de la cancha) */
-const bgConfig = computed(() => ({
-  x: 0, y: 0, width: width.value, height: height.value,
-  fill: PITCH_GREEN, listening: false,
-}))
-
-/**
- * Grupo escalado: aplica la escala uniforme y los offsets de centrado.
- * Todo el contenido de la cancha se dibuja dentro de este grupo.
- */
-const groupConfig = computed(() => ({
-  scaleX: scale.value,
-  scaleY: scale.value,
-  x: offsetX.value,
-  y: offsetY.value,
-}))
-
-// ====================================================
-// FRANJAS DE CÉSPED (16 bandas verticales alternadas)
-// ====================================================
-
-const grassStripes = computed(() => {
-  const stripes = []
-  const n = 16                    // número de franjas
-  const w = VIRTUAL_W / n        // ancho de cada franja
-  for (let i = 0; i < n; i++) {
-    stripes.push({
-      id: `stripe-${i}`,
-      x: i * w, y: 0, width: w + 1, height: VIRTUAL_H,
-      fill: i % 2 === 0 ? '#2e7d32' : '#388e3c',  // alterna dos tonos de verde
-      listening: false,          // no responde a eventos del mouse
-    })
+function getPlayerColors(el) {
+  if (el.teamId === 1) {
+    return store.teams.team1
   }
-  return stripes
-})
+  if (el.teamId === 2) {
+    return store.teams.team2
+  }
+  return { primaryColor: el.color || '#e74c3c', secondaryColor: '#ffffff' }
+}
 
-// ====================================================
-// BORDE Y LÍNEA CENTRAL
-// ====================================================
+function isSelected(el) {
+  return store.selectedElementId === el.id
+}
 
-/** Rectángulo exterior que delimita el campo (1050 × 680 px) */
-const pitchBoundaryConfig = computed(() => ({
-  x: 0, y: 0, width: VIRTUAL_W, height: VIRTUAL_H,
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, fill: null, listening: false,
-}))
-
-/** Línea de medio campo (vertical, divide el campo en dos mitades) */
-const centerLineConfig = computed(() => ({
-  points: [VIRTUAL_W / 2, 0, VIRTUAL_W / 2, VIRTUAL_H],
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, listening: false,
-}))
-
-// ====================================================
-// CÍRCULO Y PUNTO CENTRAL
-// ====================================================
-
-/** Círculo central: radio 9.15 m (91.5 px), sin relleno */
-const centerCircleConfig = computed(() => ({
-  x: VIRTUAL_W / 2, y: VIRTUAL_H / 2,
-  radius: 91.5,
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, fill: null, listening: false,
-}))
-
-/** Punto central: radio 0.4 m (4 px), relleno blanco */
-const centerSpotConfig = computed(() => ({
-  x: VIRTUAL_W / 2, y: VIRTUAL_H / 2,
-  radius: 4, fill: LINE_COLOR, listening: false,
-}))
-
-// ====================================================
-// ÁREAS (grande → 16.5 m, chica → 5.5 m)
-// ====================================================
-
-/** Área grande izquierda: 165 × 403.2 px (16.5 × 40.32 m) */
-const leftPenaltyAreaConfig = computed(() => ({
-  x: 0, y: 138.4, width: 165, height: 403.2,
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, fill: null, listening: false,
-}))
-
-/** Área grande derecha: simétrica a la izquierda */
-const rightPenaltyAreaConfig = computed(() => ({
-  x: VIRTUAL_W - 165, y: 138.4, width: 165, height: 403.2,
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, fill: null, listening: false,
-}))
-
-/** Área chica izquierda: 55 × 183.2 px (5.5 × 18.32 m) */
-const leftGoalAreaConfig = computed(() => ({
-  x: 0, y: 248.4, width: 55, height: 183.2,
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, fill: null, listening: false,
-}))
-
-/** Área chica derecha */
-const rightGoalAreaConfig = computed(() => ({
-  x: VIRTUAL_W - 55, y: 248.4, width: 55, height: 183.2,
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, fill: null, listening: false,
-}))
-
-// ====================================================
-// PORTERÍAS (2 × 7.32 m → 20 × 73.2 px)
-// ====================================================
-
-/** Portería izquierda: sobresale 20 px fuera del campo */
-const leftGoalConfig = computed(() => ({
-  x: -20, y: 303.4, width: 20, height: 73.2,
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, fill: null, listening: false,
-}))
-
-/** Portería derecha: a partir del borde X = 1050 */
-const rightGoalConfig = computed(() => ({
-  x: VIRTUAL_W, y: 303.4, width: 20, height: 73.2,
-  stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, fill: null, listening: false,
-}))
-
-// ====================================================
-// MEDIALUNA (ARCO PENAL) — <v-arc> con radios iguales
-// ====================================================
-// Se usa innerRadius = outerRadius para que el arco
-// se dibuje como una línea en lugar de un segmento relleno.
-// rotation = ángulo de inicio, angle = barrido (grados).
-
-/** Medialuna izquierda: centrada en el punto penal (110, 340),
- *  radio 9.15 m (91.5 px), barre 106° hacia la derecha. */
-const leftPenaltyArcConfig = computed(() => ({
-  x: 110, y: 340,
-  innerRadius: 91.5, outerRadius: 91.5,
-  rotation: 307, angle: 106,
-  stroke: LINE_COLOR, strokeWidth: 2,
-  listening: false,
-}))
-
-/** Medialuna derecha: centrada en (940, 340), barre 106° hacia la izquierda. */
-const rightPenaltyArcConfig = computed(() => ({
-  x: 940, y: 340,
-  innerRadius: 91.5, outerRadius: 91.5,
-  rotation: 127, angle: 106,
-  stroke: LINE_COLOR, strokeWidth: 2,
-  listening: false,
-}))
-
-// ====================================================
-// PUNTOS PENALES (11 m desde la línea de meta)
-// ====================================================
-
-/** Punto penal izquierdo (X = 110, centrado verticalmente) */
-const leftPenaltySpotConfig = computed(() => ({
-  x: 110, y: VIRTUAL_H / 2,
-  radius: 3, fill: LINE_COLOR, listening: false,
-}))
-
-/** Punto penal derecho (X = 940) */
-const rightPenaltySpotConfig = computed(() => ({
-  x: VIRTUAL_W - 110, y: VIRTUAL_H / 2,
-  radius: 3, fill: LINE_COLOR, listening: false,
-}))
-
-// ====================================================
-// ARCOS DE CÓRNER (radio 1 m = 10 px, cuarto de círculo)
-// ====================================================
-
-const cornerConfigs = computed(() => {
-  return [
-    { id: 'corner-tl', x: 0, y: 0, innerRadius: 10, outerRadius: 10, rotation: 0, angle: 90, stroke: LINE_COLOR, strokeWidth: 2, listening: false },
-    { id: 'corner-tr', x: 1050, y: 0, innerRadius: 10, outerRadius: 10, rotation: 90, angle: 90, stroke: LINE_COLOR, strokeWidth: 2, listening: false },
-    { id: 'corner-br', x: 1050, y: 680, innerRadius: 10, outerRadius: 10, rotation: 180, angle: 90, stroke: LINE_COLOR, strokeWidth: 2, listening: false },
-    { id: 'corner-bl', x: 0, y: 680, innerRadius: 10, outerRadius: 10, rotation: 270, angle: 90, stroke: LINE_COLOR, strokeWidth: 2, listening: false },
-  ]
-})
-
-// ====================================================
-// UTILIDAD: convertir coordenadas del Stage a virtuales
-// ====================================================
-
-/**
- * Convierte una posición en píxeles del Stage a coordenadas virtuales
- * (espacio 1050×680), teniendo en cuenta la escala y el offset.
- */
-function screenToVirtual(pos) {
+function screenToVirtual(position) {
   return {
-    x: (pos.x - offsetX.value) / scale.value,
-    y: (pos.y - offsetY.value) / scale.value,
+    x: (position.x - offsetX.value) / scale.value,
+    y: (position.y - offsetY.value) / scale.value,
   }
 }
 
-// ====================================================
-// MANEJADORES DE EVENTOS DEL STAGE
-// ====================================================
-
-/**
- * Click en el fondo de la cancha (no sobre un elemento existente).
- * Crea un jugador o un texto libre según la herramienta activa.
- */
-function handleStageClick(e) {
-  if (e.target !== e.currentTarget) return
-
-  const pos = e.currentTarget.getPointerPosition()
-  if (!pos) return
-
-  const v = screenToVirtual(pos)
-
-  if (store.selectedTool === 'player') {
-    store.addElement({
-      type: 'player',
-      x: v.x,
-      y: v.y,
-      teamId: store.activeTeam,
-      playerNumber: store.playerNumber,
-      playerName: store.playerName,
-    })
+function elementIdFromNode(node) {
+  let current = node
+  while (current && current !== stage) {
+    const id = current.getAttr('elementId')
+    if (id !== undefined) return id
+    current = current.getParent()
   }
-
-  if (store.selectedTool === 'text') {
-    store.addElement({
-      type: 'text',
-      x: v.x,
-      y: v.y,
-      color: store.selectedColor,
-      text: store.playerName || 'Texto',
-      fontSize: store.fontSize,
-    })
-  }
-
-  selectedElementId.value = null
-}
-
-/** Inicia el dibujo de flecha / línea / zona (solo si la herramienta activa lo permite). */
-function handleMouseDown(e) {
-  if (!['arrow', 'line', 'zone'].includes(store.selectedTool)) return
-  if (e.target !== e.currentTarget) return
-
-  const pos = e.currentTarget.getPointerPosition()
-  if (!pos) return
-
-  const v = screenToVirtual(pos)
-  isDrawing.value = true
-  drawStart.value = { x: v.x, y: v.y }
-  drawCurrent.value = { x: v.x, y: v.y }
-}
-
-/** Actualiza la posición del cursor mientras se dibuja. */
-function handleMouseMove() {
-  if (!isDrawing.value) return
-  const stage = stageRef.value?.getStage()
-  if (!stage) return
-  const pos = stage.getPointerPosition()
-  if (pos) {
-    drawCurrent.value = screenToVirtual(pos)
-  }
+  return null
 }
 
 /**
- * Finaliza el dibujo y crea el elemento correspondiente
- * (flecha, línea o zona) si el trazo supera los 5 px.
+ * Respaldo del hit-test de Konva para fichas. Si el canvas aún no actualizó
+ * su hit graph, el Stage puede reportarse como target; el modelo sigue siendo
+ * la fuente de verdad para decidir si el puntero está sobre una ficha.
  */
-function handleMouseUp() {
-  if (!isDrawing.value) return
-  const tool = store.selectedTool
-  const dx = drawCurrent.value.x - drawStart.value.x
-  const dy = drawCurrent.value.y - drawStart.value.y
-
-  if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
-    if (tool === 'arrow') {
-      store.addElement({
-        type: 'arrow',
-        x: drawStart.value.x, y: drawStart.value.y,
-        x2: drawCurrent.value.x, y2: drawCurrent.value.y,
-        color: store.selectedColor,
-        strokeWidth: store.strokeWidth,
-      })
-    }
-    if (tool === 'line') {
-      store.addElement({
-        type: 'line',
-        x: drawStart.value.x, y: drawStart.value.y,
-        x2: drawCurrent.value.x, y2: drawCurrent.value.y,
-        color: store.selectedColor,
-        strokeWidth: store.strokeWidth,
-      })
-    }
-    if (tool === 'zone') {
-      store.addElement({
-        type: 'zone',
-        x: Math.min(drawStart.value.x, drawCurrent.value.x),
-        y: Math.min(drawStart.value.y, drawCurrent.value.y),
-        x2: Math.max(drawStart.value.x, drawCurrent.value.x),
-        y2: Math.max(drawStart.value.y, drawCurrent.value.y),
-        color: store.selectedColor,
-        strokeWidth: store.strokeWidth,
-      })
-    }
+function findPlayerAt(point) {
+  for (let index = store.elements.length - 1; index >= 0; index -= 1) {
+    const element = store.elements[index]
+    if (element.type !== 'player') continue
+    if (Math.hypot(point.x - element.x, point.y - element.y) <= 20) return element
   }
-
-  isDrawing.value = false
+  return null
 }
 
-// ====================================================
-// MANEJADORES DE ARRASTRE DE ELEMENTOS
-// ====================================================
-
-/** Al soltar un jugador, actualiza su posición en el store. */
-function handlePlayerDrag(el, e) {
-  const node = e.target
-  store.updateElement(el.id, { x: node.x(), y: node.y() })
+function selectElement(id) {
+  store.selectElement(id)
 }
 
-/** Al soltar una zona, actualiza su posición manteniendo su tamaño. */
-function handleZoneDrag(el, e) {
-  const node = e.target
-  const dx = node.x() - el.x
-  const dy = node.y() - el.y
-  store.updateElement(el.id, {
-    x: node.x(), y: node.y(),
-    x2: el.x2 + dx, y2: el.y2 + dy,
+function selectAndStartPlayerDrag(player, event) {
+  store.selectElement(player.id)
+
+  const group = elementNodes.get(player.id)
+  if (!group || !group.draggable() || group.isDragging()) return
+
+  // El target fue el Stage y Konva no entregó este gesto al Group. Iniciamos
+  // su drag nativo con el mismo evento para conservar offset y dragend.
+  event.evt?.preventDefault?.()
+  group.startDrag(event)
+}
+
+function bindSelection(node, id) {
+  node.setAttr('elementId', id)
+  node.on('mousedown touchstart', () => selectElement(id))
+}
+
+function createPlayer(el) {
+  const group = new Konva.Group({ draggable: true, listening: true, elementId: el.id })
+  const circle = new Konva.Circle()
+  const number = new Konva.Text({ listening: false })
+  group.add(circle, number)
+  bindSelection(group, el.id)
+  group.on('dragend', () => {
+    store.updateElement(el.id, { x: group.x(), y: group.y() })
+  })
+  elementGroup.add(group)
+  return group
+}
+
+function updatePlayer(group, el) {
+  const colors = getPlayerColors(el)
+  const selected = isSelected(el)
+  // Pinia puede cambiar mientras Konva está en pleno drag. No devolvemos la
+  // ficha a la posición anterior hasta que el dragend persista su posición.
+  if (!group.isDragging()) group.position({ x: el.x, y: el.y })
+  group.getChildren()[0].setAttrs({
+    x: 0,
+    y: 0,
+    radius: 18,
+    fill: colors.primaryColor,
+    stroke: selected ? '#ffffff' : 'rgba(0,0,0,0.35)',
+    strokeWidth: selected ? 3 : 2,
+    listening: true,
+    perfectDrawEnabled: false,
+  })
+  group.getChildren()[1].setAttrs({
+    x: -10,
+    y: -10,
+    width: 20,
+    height: 20,
+    text: String(el.playerNumber),
+    fontSize: 15,
+    fontStyle: 'bold',
+    fill: colors.secondaryColor,
+    align: 'center',
+    verticalAlign: 'middle',
+    listening: false,
   })
 }
 
-/** Al soltar un texto, actualiza su posición en el store. */
-function handleTextDrag(el, e) {
-  const node = e.target
-  store.updateElement(el.id, { x: node.x(), y: node.y() })
+function drawArrow(ctx, el) {
+  const controlX = el.cx ?? (el.x + el.x2) / 2
+  const controlY = el.cy ?? (el.y + el.y2) / 2
+  const angle = el.cx == null
+    ? Math.atan2(el.y2 - el.y, el.x2 - el.x)
+    : Math.atan2(el.y2 - controlY, el.x2 - controlX)
+  const headLength = 14
+  const headAngle = Math.PI / 6
+
+  ctx.beginPath()
+  ctx.moveTo(el.x, el.y)
+  if (el.cx == null) ctx.lineTo(el.x2, el.y2)
+  else ctx.quadraticCurveTo(controlX, controlY, el.x2, el.y2)
+  ctx.strokeStyle = el.color
+  ctx.lineWidth = el.strokeWidth || 5
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  ctx.setLineDash(el.dashed ? [12, 6] : [])
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  ctx.beginPath()
+  ctx.moveTo(el.x2, el.y2)
+  ctx.lineTo(el.x2 - headLength * Math.cos(angle - headAngle), el.y2 - headLength * Math.sin(angle - headAngle))
+  ctx.lineTo(el.x2 - headLength * Math.cos(angle + headAngle), el.y2 - headLength * Math.sin(angle + headAngle))
+  ctx.closePath()
+  ctx.fillStyle = el.color
+  ctx.fill()
 }
 
-// ====================================================
-// SELECCIÓN Y TECLADO
-// ====================================================
-
-/** Marca un elemento como seleccionado (resalta su borde). */
-function selectElement(id) {
-  selectedElementId.value = id
+function createArrow(el) {
+  const group = new Konva.Group()
+  const visual = new Konva.Shape({ listening: false })
+  const hitArea = new Konva.Line({ listening: true })
+  group.add(visual, hitArea)
+  bindSelection(group, el.id)
+  elementGroup.add(group)
+  return group
 }
 
-/** Elimina el elemento seleccionado con Supr/Backspace; Escape deselecciona. */
-function onKeyDown(e) {
-  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedElementId.value !== null) {
-    store.removeElement(selectedElementId.value)
-    selectedElementId.value = null
+function updateArrow(group, el) {
+  const selected = isSelected(el)
+  const visual = group.getChildren()[0]
+  const hitArea = group.getChildren()[1]
+  visual.setAttrs({
+    sceneFunc(ctx) {
+      drawArrow(ctx, el)
+    },
+    listening: false,
+    shadowColor: selected ? '#4a6cf7' : undefined,
+    shadowBlur: selected ? 10 : 0,
+    shadowOffset: { x: 0, y: 0 },
+  })
+  hitArea.setAttrs({
+    points: el.cx == null ? [el.x, el.y, el.x2, el.y2] : [el.x, el.y, el.cx, el.cy, el.x2, el.y2],
+    stroke: 'rgba(0,0,0,0.01)',
+    strokeWidth: 28,
+    hitStrokeWidth: 28,
+    tension: el.cx == null ? 0 : 0.4,
+    lineCap: 'round',
+    lineJoin: 'round',
+    listening: true,
+  })
+}
+
+function createZone(el) {
+  const node = new Konva.Rect({ draggable: true })
+  bindSelection(node, el.id)
+  node.on('dragend', () => {
+    const current = store.elements.find((item) => item.id === el.id)
+    if (!current) return
+    const dx = node.x() - current.x
+    const dy = node.y() - current.y
+    store.updateElement(el.id, { x: node.x(), y: node.y(), x2: current.x2 + dx, y2: current.y2 + dy })
+  })
+  elementGroup.add(node)
+  return node
+}
+
+function updateZone(node, el) {
+  const selected = isSelected(el)
+  if (!node.isDragging()) node.position({ x: el.x, y: el.y })
+  node.setAttrs({
+    width: el.x2 - el.x,
+    height: el.y2 - el.y,
+    stroke: el.color,
+    strokeWidth: el.strokeWidth || 3,
+    fill: `${el.color}22`,
+    dash: [8, 4],
+    draggable: true,
+    shadowColor: selected ? '#ffffff' : undefined,
+    shadowBlur: selected ? 6 : 0,
+    shadowOffset: { x: 0, y: 0 },
+  })
+}
+
+function createLine(el) {
+  const node = new Konva.Line()
+  bindSelection(node, el.id)
+  elementGroup.add(node)
+  return node
+}
+
+function updateLine(node, el) {
+  const selected = isSelected(el)
+  node.setAttrs({
+    points: [el.x, el.y, el.x2, el.y2],
+    stroke: el.color,
+    strokeWidth: el.strokeWidth || 3,
+    hitStrokeWidth: 20,
+    lineCap: 'round',
+    shadowColor: selected ? '#ffffff' : undefined,
+    shadowBlur: selected ? 6 : 0,
+    shadowOffset: { x: 0, y: 0 },
+  })
+}
+
+function createText(el) {
+  const node = new Konva.Text({ draggable: true })
+  bindSelection(node, el.id)
+  node.on('dragend', () => {
+    store.updateElement(el.id, { x: node.x(), y: node.y() })
+  })
+  elementGroup.add(node)
+  return node
+}
+
+function updateText(node, el) {
+  const selected = isSelected(el)
+  if (!node.isDragging()) node.position({ x: el.x, y: el.y })
+  node.setAttrs({
+    text: el.text || '',
+    fontSize: el.fontSize || 20,
+    fontStyle: 'bold',
+    fill: el.color,
+    draggable: true,
+    shadowColor: selected ? '#ffffff' : undefined,
+    shadowBlur: selected ? 6 : 0,
+    shadowOffset: { x: 0, y: 0 },
+  })
+}
+
+function createElement(el) {
+  if (el.type === 'player') return createPlayer(el)
+  if (el.type === 'arrow') return createArrow(el)
+  if (el.type === 'zone') return createZone(el)
+  if (el.type === 'line') return createLine(el)
+  if (el.type === 'text') return createText(el)
+  return null
+}
+
+function updateElement(node, el) {
+  if (el.type === 'player') updatePlayer(node, el)
+  else if (el.type === 'arrow') updateArrow(node, el)
+  else if (el.type === 'zone') updateZone(node, el)
+  else if (el.type === 'line') updateLine(node, el)
+  else if (el.type === 'text') updateText(node, el)
+}
+
+function reconcileElements() {
+  if (!elementLayer) return
+  const currentIds = new Set(store.elements.map((el) => el.id))
+
+  for (const [id, node] of elementNodes) {
+    if (!currentIds.has(id)) {
+      node.destroy()
+      elementNodes.delete(id)
+    }
   }
-  if (e.key === 'Escape') {
-    selectedElementId.value = null
+
+  for (const el of store.elements) {
+    let node = elementNodes.get(el.id)
+    if (!node) {
+      node = createElement(el)
+      if (!node) continue
+      elementNodes.set(el.id, node)
+    }
+    updateElement(node, el)
+  }
+
+  renderArrowHandles()
+  elementLayer.batchDraw()
+  overlayLayer.batchDraw()
+}
+
+function renderArrowHandles() {
+  const arrow = store.selectedElement
+  if (!arrow || arrow.type !== 'arrow') {
+    overlayGroup.destroyChildren()
+    handleArrowId = null
+    arrowHandles = []
+    return
+  }
+
+  const middleX = arrow.cx ?? (arrow.x + arrow.x2) / 2
+  const middleY = arrow.cy ?? (arrow.y + arrow.y2) / 2
+  const definitions = [
+    { x: arrow.x, y: arrow.y, fill: '#4a6cf7', update: (node) => ({ x: node.x(), y: node.y() }) },
+    { x: middleX, y: middleY, fill: '#f1c40f', update: (node) => ({ cx: node.x(), cy: node.y() }) },
+    { x: arrow.x2, y: arrow.y2, fill: '#e74c3c', update: (node) => ({ x2: node.x(), y2: node.y() }) },
+  ]
+
+  if (handleArrowId !== arrow.id) {
+    overlayGroup.destroyChildren()
+    handleArrowId = arrow.id
+    arrowHandles = definitions.map((handle) => {
+      const node = new Konva.Circle({ x: handle.x, y: handle.y, radius: 8, fill: handle.fill, stroke: '#ffffff', strokeWidth: 2, hitStrokeWidth: 12, draggable: true })
+      node.on('dragmove', () => store.updateElement(arrow.id, handle.update(node)))
+      overlayGroup.add(node)
+      return node
+    })
+    return
+  }
+
+  // No se destruye el handle que el usuario está arrastrando: Konva mantiene
+  // su ciclo nativo de drag aun cuando Pinia actualiza la flecha.
+  definitions.forEach((handle, index) => {
+    const node = arrowHandles[index]
+    if (node && !node.isDragging()) node.position({ x: handle.x, y: handle.y })
+  })
+}
+
+function clearPreview() {
+  if (previewNode) {
+    previewNode.destroy()
+    previewNode = null
   }
 }
+
+function updatePreview() {
+  if (!drawStart || !drawCurrent) return
+  const tool = store.selectedTool
+  if (!previewNode) {
+    previewNode = tool === 'zone'
+      ? new Konva.Rect({ listening: false })
+      : new Konva.Arrow({ listening: false })
+    overlayGroup.add(previewNode)
+  }
+
+  if (tool === 'zone') {
+    previewNode.setAttrs({
+      x: Math.min(drawStart.x, drawCurrent.x),
+      y: Math.min(drawStart.y, drawCurrent.y),
+      width: Math.abs(drawCurrent.x - drawStart.x),
+      height: Math.abs(drawCurrent.y - drawStart.y),
+      stroke: store.selectedColor,
+      strokeWidth: store.strokeWidth,
+      fill: `${store.selectedColor}22`,
+      dash: [8, 4],
+    })
+  } else {
+    previewNode.setAttrs({
+      points: [drawStart.x, drawStart.y, drawCurrent.x, drawCurrent.y],
+      stroke: store.selectedColor,
+      fill: tool === 'arrow' ? store.selectedColor : undefined,
+      strokeWidth: store.strokeWidth,
+      pointerLength: 10,
+      pointerWidth: 10,
+      dash: tool === 'line' ? [10, 5] : undefined,
+    })
+  }
+  overlayLayer.batchDraw()
+}
+
+function finishDrawing() {
+  if (!isDrawing || !drawStart || !drawCurrent) return
+  isDrawing = false
+  clearPreview()
+
+  const dx = drawCurrent.x - drawStart.x
+  const dy = drawCurrent.y - drawStart.y
+  if (Math.abs(dx) < DRAW_THRESHOLD && Math.abs(dy) < DRAW_THRESHOLD) return
+
+  if (store.selectedTool === 'arrow') {
+    store.addElement({ type: 'arrow', x: drawStart.x, y: drawStart.y, x2: drawCurrent.x, y2: drawCurrent.y, color: store.selectedColor, strokeWidth: store.strokeWidth || 5, dashed: false })
+  } else if (store.selectedTool === 'line') {
+    store.addElement({ type: 'line', x: drawStart.x, y: drawStart.y, x2: drawCurrent.x, y2: drawCurrent.y, color: store.selectedColor, strokeWidth: store.strokeWidth })
+  } else if (store.selectedTool === 'zone') {
+    store.addElement({ type: 'zone', x: Math.min(drawStart.x, drawCurrent.x), y: Math.min(drawStart.y, drawCurrent.y), x2: Math.max(drawStart.x, drawCurrent.x), y2: Math.max(drawStart.y, drawCurrent.y), color: store.selectedColor, strokeWidth: store.strokeWidth })
+  }
+}
+
+function bindStageEvents() {
+  stage.on('mousedown touchstart', (event) => {
+    // Los elementos ya seleccionan mediante sus handlers nativos y no inician dibujo.
+    if (elementIdFromNode(event.target) !== null || event.target.getParent() === overlayGroup) return
+
+    const position = stage.getPointerPosition()
+    if (!position || !scale.value) return
+    const point = screenToVirtual(position)
+
+    // Evita crear una ficha nueva cuando el hit-test nativo devolvió el Stage
+    // pese a que el puntero cayó dentro de una ficha ya existente.
+    const player = findPlayerAt(point)
+    if (player) {
+      selectAndStartPlayerDrag(player, event)
+      return
+    }
+
+    store.clearSelection()
+
+    if (store.selectedTool === 'player') {
+      store.addElement({
+        type: 'player',
+        x: point.x,
+        y: point.y,
+        teamId: store.activeTeam,
+        playerNumber: store.playerNumber,
+        playerName: store.playerName,
+      })
+      return
+    }
+
+    if (store.selectedTool === 'text') {
+      store.addElement({ type: 'text', x: point.x, y: point.y, color: store.selectedColor, text: store.playerName || 'Texto', fontSize: store.fontSize })
+      return
+    }
+
+    if (['arrow', 'line', 'zone'].includes(store.selectedTool)) {
+      isDrawing = true
+      drawStart = point
+      drawCurrent = point
+    }
+  })
+
+  stage.on('mousemove touchmove', () => {
+    if (!isDrawing) return
+    const position = stage.getPointerPosition()
+    if (!position || !scale.value) return
+    drawCurrent = screenToVirtual(position)
+    updatePreview()
+  })
+
+  stage.on('mouseup touchend', finishDrawing)
+}
+
+function drawPitch() {
+  const markings = pitchMarkings.value
+  const staticAttrs = { stroke: LINE_COLOR, strokeWidth: LINE_WIDTH, listening: false }
+  const add = (node) => pitchGroup.add(node)
+
+  for (let index = 0; index < 16; index += 1) {
+    add(new Konva.Rect({ x: index * (VIRTUAL_W / 16), y: 0, width: VIRTUAL_W / 16 + 1, height: VIRTUAL_H, fill: index % 2 === 0 ? '#2e7d32' : '#388e3c', listening: false }))
+  }
+  add(new Konva.Rect({ ...markings.outerRect, ...staticAttrs }))
+  add(new Konva.Line({ points: [markings.centerLine.x1, markings.centerLine.y1, markings.centerLine.x2, markings.centerLine.y2], ...staticAttrs }))
+  add(new Konva.Circle({ ...markings.centerCircle, ...staticAttrs }))
+  add(new Konva.Circle({ ...markings.centerSpot, fill: LINE_COLOR, listening: false }))
+  for (const area of [markings.leftPenaltyArea, markings.rightPenaltyArea, markings.leftGoalArea, markings.rightGoalArea, markings.leftGoal, markings.rightGoal]) {
+    add(new Konva.Rect({ ...area, ...staticAttrs }))
+  }
+  add(new Konva.Arc({ x: markings.leftPenaltyArc.x, y: markings.leftPenaltyArc.y, innerRadius: 91.5, outerRadius: 91.5, rotation: 307, angle: 106, ...staticAttrs }))
+  add(new Konva.Arc({ x: markings.rightPenaltyArc.x, y: markings.rightPenaltyArc.y, innerRadius: 91.5, outerRadius: 91.5, rotation: 127, angle: 106, ...staticAttrs }))
+  add(new Konva.Circle({ ...markings.leftPenaltySpot, fill: LINE_COLOR, listening: false }))
+  add(new Konva.Circle({ ...markings.rightPenaltySpot, fill: LINE_COLOR, listening: false }))
+  for (const [index, corner] of markings.corners.entries()) {
+    add(new Konva.Arc({ x: corner.x, y: corner.y, innerRadius: corner.radius, outerRadius: corner.radius, rotation: index * 90, angle: 90, ...staticAttrs }))
+  }
+}
+
+function resizeStage() {
+  if (!stage) return
+  stage.size({ width: width.value, height: height.value })
+  backgroundLayer.getChildren()[0].size({ width: width.value, height: height.value })
+  const transform = { x: offsetX.value, y: offsetY.value, scaleX: scale.value, scaleY: scale.value }
+  pitchGroup.setAttrs(transform)
+  elementGroup.setAttrs(transform)
+  overlayGroup.setAttrs(transform)
+  stage.batchDraw()
+}
+
+function onKeyDown(event) {
+  if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedElementId !== null) {
+    store.removeElement(store.selectedElementId)
+  } else if (event.key === 'Escape') {
+    store.clearSelection()
+  }
+}
+
+const stopReconciliation = watch(
+  () => [store.elements, store.selectedElementId, store.teams],
+  reconcileElements,
+  { deep: true }
+)
+
+const stopResize = watch([width, height, scale, offsetX, offsetY], resizeStage)
 
 onMounted(() => {
+  stage = new Konva.Stage({ container: containerRef.value, width: width.value, height: height.value })
+  backgroundLayer = new Konva.Layer()
+  pitchLayer = new Konva.Layer()
+  elementLayer = new Konva.Layer()
+  overlayLayer = new Konva.Layer()
+  backgroundLayer.add(new Konva.Rect({ x: 0, y: 0, width: width.value, height: height.value, fill: PITCH_GREEN, listening: false }))
+  pitchGroup = new Konva.Group()
+  elementGroup = new Konva.Group()
+  overlayGroup = new Konva.Group()
+  pitchLayer.add(pitchGroup)
+  elementLayer.add(elementGroup)
+  overlayLayer.add(overlayGroup)
+  stage.add(backgroundLayer, pitchLayer, elementLayer, overlayLayer)
+  drawPitch()
+  bindStageEvents()
+  resizeStage()
+  reconcileElements()
   window.addEventListener('keydown', onKeyDown)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  stopReconciliation()
+  stopResize()
+  elementNodes.clear()
+  stage?.destroy()
+  stage = null
 })
-
-// ====================================================
-// VISTA PREVIA DE DIBUJO (mientras se arrastra el mouse)
-// ====================================================
-
-/** Config de la flecha / línea temporal durante el dibujo. */
-const previewArrowConfig = computed(() => ({
-  points: [drawStart.value.x, drawStart.value.y, drawCurrent.value.x, drawCurrent.value.y],
-  stroke: store.selectedColor,
-  strokeWidth: store.strokeWidth,
-  fill: store.selectedTool === 'arrow' ? store.selectedColor : undefined,
-  pointerLength: 10,
-  pointerWidth: 10,
-  dash: store.selectedTool === 'line' ? [10, 5] : undefined,
-  listening: false,
-}))
-
-/** Config del rectángulo punteado temporal (zona). */
-const previewRectConfig = computed(() => ({
-  x: Math.min(drawStart.value.x, drawCurrent.value.x),
-  y: Math.min(drawStart.value.y, drawCurrent.value.y),
-  width: Math.abs(drawCurrent.value.x - drawStart.value.x),
-  height: Math.abs(drawCurrent.value.y - drawStart.value.y),
-  stroke: store.selectedColor,
-  strokeWidth: store.strokeWidth,
-  fill: store.selectedColor + '22',
-  dash: [8, 4],
-  listening: false,
-}))
-
-// ====================================================
-// CONFIGS DE RENDERIZADO DE ELEMENTOS
-// ====================================================
-
-/**
- * Obtiene los colores de un jugador según su equipo.
- * Si el jugador no tiene teamId, usa sus colores propios (compatibilidad).
- */
-function getPlayerColors(el) {
-  if (el.teamId === 1 && store.teams.team1) {
-    return {
-      primary: store.teams.team1.primaryColor,
-      secondary: store.teams.team1.secondaryColor,
-    }
-  }
-  if (el.teamId === 2 && store.teams.team2) {
-    return {
-      primary: store.teams.team2.primaryColor,
-      secondary: store.teams.team2.secondaryColor,
-    }
-  }
-  return {
-    primary: el.color || '#e74c3c',
-    secondary: '#ffffff',
-  }
-}
-
-/** Círculo del jugador: radio 18 px, color primario del equipo, borde al seleccionar. */
-function playerCircleConfig(el) {
-  const isSelected = selectedElementId.value === el.id
-  const colors = getPlayerColors(el)
-  return {
-    x: 0, y: 0, radius: 18,
-    fill: colors.primary,
-    stroke: isSelected ? '#fff' : 'rgba(0,0,0,0.35)',
-    strokeWidth: isSelected ? 3 : 2,
-    listening: true,
-  }
-}
-
-/** Número del jugador (centrado dentro del círculo). Usa el color secundario del equipo. */
-function playerTextConfig(el) {
-  const colors = getPlayerColors(el)
-  return {
-    x: -10, y: -10, width: 20, height: 20,
-    text: String(el.playerNumber),
-    fontSize: 15, fontStyle: 'bold',
-    fill: colors.secondary, align: 'center', verticalAlign: 'middle',
-    listening: false,
-  }
-}
-
-/** Flecha (pase / desplazamiento). */
-function arrowConfig(el) {
-  const isSelected = selectedElementId.value === el.id
-  return {
-    points: [el.x, el.y, el.x2, el.y2],
-    stroke: el.color,
-    strokeWidth: el.strokeWidth || 3,
-    fill: el.color,
-    pointerLength: 10, pointerWidth: 10,
-    strokeScaleEnabled: false,
-    name: 'arrow',
-    ...(isSelected && { shadowColor: '#fff', shadowBlur: 6, shadowOffset: { x: 0, y: 0 } }),
-  }
-}
-
-/** Zona (rectángulo con borde punteado). */
-function zoneConfig(el) {
-  const isSelected = selectedElementId.value === el.id
-  const w = el.x2 - el.x
-  const h = el.y2 - el.y
-  return {
-    x: el.x, y: el.y, width: w, height: h,
-    stroke: el.color,
-    strokeWidth: el.strokeWidth || 3,
-    fill: el.color + '22',
-    dash: [8, 4],
-    draggable: true,
-    name: 'zone',
-    ...(isSelected && { shadowColor: '#fff', shadowBlur: 6, shadowOffset: { x: 0, y: 0 } }),
-  }
-}
-
-/** Línea recta. */
-function lineConfig(el) {
-  const isSelected = selectedElementId.value === el.id
-  return {
-    points: [el.x, el.y, el.x2, el.y2],
-    stroke: el.color,
-    strokeWidth: el.strokeWidth || 3,
-    lineCap: 'round',
-    name: 'line',
-    ...(isSelected && { shadowColor: '#fff', shadowBlur: 6, shadowOffset: { x: 0, y: 0 } }),
-  }
-}
-
-/** Texto libre (arrastrable). */
-function textElConfig(el) {
-  const isSelected = selectedElementId.value === el.id
-  return {
-    x: el.x, y: el.y,
-    text: el.text || '',
-    fontSize: el.fontSize || 20,
-    fill: el.color, fontStyle: 'bold',
-    draggable: true, name: 'text',
-    ...(isSelected && { shadowColor: '#fff', shadowBlur: 6, shadowOffset: { x: 0, y: 0 } }),
-  }
-}
 </script>
 
 <style scoped>
-/* El contenedor ocupa todo el viewport de forma absoluta */
 .canvas-container {
   width: 100%;
   height: 100%;
   position: absolute;
   top: 0;
   left: 0;
+  touch-action: none;
 }
 </style>
