@@ -8,6 +8,7 @@
 <template>
   <div class="app-root">
     <Toolbar />
+    <TeamToolbar />
     <CanvasBoard />
   </div>
 </template>
@@ -15,6 +16,7 @@
 <script setup>
 import { onMounted } from 'vue'
 import Toolbar from './components/Toolbar.vue'
+import TeamToolbar from './components/TeamToolbar.vue'
 import CanvasBoard from './components/CanvasBoard.vue'
 import { usePizarraStore } from './stores/pizarra'
 

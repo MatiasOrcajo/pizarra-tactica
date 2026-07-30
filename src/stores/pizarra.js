@@ -13,7 +13,8 @@ const STORAGE_KEY = 'pizarra-tactica-autosave'
  * Cada clave es el nombre de la formación (ej. '4-4-2').
  * El valor es un array de 11 objetos { x, y } en el espacio
  * virtual 1050×680, orientado para el Equipo 1 (ataca → derecha).
- * El Equipo 2 espeja las coordenadas X automáticamente.
+ * Al aplicarse, sus coordenadas X se expanden hasta campo rival; el Equipo 2
+ * recibe el espejo de esas posiciones para atacar hacia la izquierda.
  *
  * Orden del array: [0] = GK, [1..10] = jugadores de campo.
  */
@@ -120,6 +121,23 @@ const FORMATIONS = {
 /** Dorsales por defecto para cada posición (1 = GK, luego de campo) */
 const DEFAULT_NUMBERS = [1, 2, 4, 5, 3, 8, 6, 10, 7, 9, 11]
 
+// Las plantillas base terminan cerca del mediocampo. Al desplegarlas se
+// expanden hasta campo rival para representar un equipo en fase de ataque.
+const ATTACK_ORIGIN_X = 30
+const ATTACK_END_X = 850
+const FORMATION_REFERENCE_END_X = 550
+
+function positionForTeam(pos, teamId) {
+  const attackingX = ATTACK_ORIGIN_X +
+    (pos.x - ATTACK_ORIGIN_X) * (ATTACK_END_X - ATTACK_ORIGIN_X) /
+    (FORMATION_REFERENCE_END_X - ATTACK_ORIGIN_X)
+
+  return {
+    x: teamId === 1 ? attackingX : 1050 - attackingX,
+    y: pos.y,
+  }
+}
+
 /**
  * Crea los 11 jugadores de un equipo según su formación actual.
  * Cada jugador recibe un id único a partir de startId.
@@ -131,17 +149,19 @@ const DEFAULT_NUMBERS = [1, 2, 4, 5, 3, 8, 6, 10, 7, 9, 11]
  */
 function generateTeamPlayers(teamId, team, startId = 0) {
   const positions = FORMATIONS[team.formation] || FORMATIONS['4-4-2']
-  const isTeam1 = teamId === 1
 
-  return positions.map((pos, i) => ({
-    id: startId + i,
-    type: 'player',
-    x: isTeam1 ? pos.x : 1050 - pos.x,   // Equipo 2: espejar X
-    y: pos.y,
-    teamId,
-    playerNumber: DEFAULT_NUMBERS[i] || i + 1,
-    playerName: i === 0 ? 'POR' : '',
-  }))
+  return positions.map((pos, i) => {
+    const position = positionForTeam(pos, teamId)
+    return {
+      id: startId + i,
+      type: 'player',
+      x: position.x,
+      y: position.y,
+      teamId,
+      playerNumber: DEFAULT_NUMBERS[i] || i + 1,
+      playerName: i === 0 ? 'POR' : '',
+    }
+  })
 }
 
 /** Configuración por defecto de los equipos */
@@ -308,6 +328,20 @@ export const usePizarraStore = defineStore('pizarra', () => {
     selectedElementId.value = null
   }
 
+  /**
+   * Elimina anotaciones y devuelve ambos equipos a las formaciones elegidas
+   * actualmente, sin modificar sus nombres ni colores.
+   */
+  function resetToSelectedFormations() {
+    nextId = 0
+    const team1Players = generateTeamPlayers(1, teams.team1, nextId)
+    nextId += team1Players.length
+    const team2Players = generateTeamPlayers(2, teams.team2, nextId)
+    nextId += team2Players.length
+    elements.value = [...team1Players, ...team2Players]
+    selectedElementId.value = null
+  }
+
   // ======================
   // GESTIÓN DE EQUIPOS
   // ======================
@@ -374,7 +408,6 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
     // Reposicionar los 11 jugadores existentes según la formación
     const positions = FORMATIONS[formation]
-    const isTeam1 = teamId === 1
     const sorted = [...teamPlayers]
       .filter((p) => p.id != null)
       .sort((a, b) => a.id - b.id)
@@ -382,9 +415,10 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
     sorted.forEach((player, i) => {
       const pos = positions[i] || positions[0]
+      const position = positionForTeam(pos, teamId)
       updateElement(player.id, {
-        x: isTeam1 ? pos.x : 1050 - pos.x,
-        y: pos.y,
+        x: position.x,
+        y: position.y,
       })
     })
   }
@@ -455,6 +489,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     clearSelection,
     clearAll,
     resetToDefaults,
+    resetToSelectedFormations,
 
     // Equipos
     setTeamName,

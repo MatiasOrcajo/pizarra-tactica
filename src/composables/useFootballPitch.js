@@ -12,7 +12,7 @@ import { computed } from 'vue'
  */
 export const VIRTUAL_W = 1050
 export const VIRTUAL_H = 680
-const PITCH_MARGIN = 0.90
+const PITCH_MARGIN = 0.80
 
 /**
  * useFootballPitch(canvasWidth, canvasHeight)

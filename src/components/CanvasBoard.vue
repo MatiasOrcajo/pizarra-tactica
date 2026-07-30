@@ -1,9 +1,26 @@
 <template>
   <div ref="containerRef" class="canvas-container"></div>
+  <div v-if="selectedPlayer" class="player-popover" :style="playerPopoverStyle">
+    <input
+      :value="selectedPlayer.playerName || ''"
+      type="text"
+      placeholder="Nombre"
+      aria-label="Nombre del jugador"
+      @input="updateSelectedPlayerName"
+    >
+    <input
+      :value="selectedPlayer.playerNumber ?? ''"
+      type="text"
+      inputmode="numeric"
+      placeholder="Número"
+      aria-label="Número del jugador"
+      @input="updateSelectedPlayerNumber"
+    >
+  </div>
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Konva from 'konva'
 import { usePizarraStore } from '../stores/pizarra'
 import { useCanvasResize } from '../composables/useCanvasResize'
@@ -11,8 +28,22 @@ import { useFootballPitch, VIRTUAL_H, VIRTUAL_W } from '../composables/useFootba
 
 const store = usePizarraStore()
 const containerRef = ref(null)
+const playerPopoverId = ref(null)
 const { width, height } = useCanvasResize(containerRef)
 const { scale, offsetX, offsetY, pitchMarkings } = useFootballPitch(width, height)
+
+const selectedPlayer = computed(() => {
+  const element = store.selectedElement
+  return element?.type === 'player' && element.id === playerPopoverId.value ? element : null
+})
+
+const playerPopoverStyle = computed(() => {
+  if (!selectedPlayer.value) return {}
+  return {
+    left: `${selectedPlayer.value.x * scale.value + offsetX.value}px`,
+    top: `${selectedPlayer.value.y * scale.value + offsetY.value + 24 * scale.value}px`,
+  }
+})
 
 const LINE_COLOR = '#ffffff'
 const LINE_WIDTH = 2
@@ -33,6 +64,8 @@ let drawStart = null
 let drawCurrent = null
 let handleArrowId = null
 let arrowHandles = []
+let draggedArrowHandle = null
+let playerPointerDown = null
 
 // Cada elemento del store conserva su nodo Konva durante toda su vida.
 const elementNodes = new Map()
@@ -82,11 +115,54 @@ function findPlayerAt(point) {
   return null
 }
 
+function pointNearSegment(point, start, end) {
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  const lengthSquared = dx * dx + dy * dy
+  const t = lengthSquared ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared)) : 0
+  return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t)) <= 18
+}
+
+function findArrowAt(point) {
+  for (let index = store.elements.length - 1; index >= 0; index -= 1) {
+    const element = store.elements[index]
+    if (element.type !== 'arrow') continue
+
+    let previous = { x: element.x, y: element.y }
+    const steps = element.cx == null ? 1 : 24
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps
+      const current = element.cx == null
+        ? { x: element.x2, y: element.y2 }
+        : {
+            x: (1 - t) ** 2 * element.x + 2 * (1 - t) * t * element.cx + t ** 2 * element.x2,
+            y: (1 - t) ** 2 * element.y + 2 * (1 - t) * t * element.cy + t ** 2 * element.y2,
+          }
+      if (pointNearSegment(point, previous, current)) return element
+      previous = current
+    }
+  }
+  return null
+}
+
 function selectElement(id) {
   store.selectElement(id)
 }
 
+function updateSelectedPlayerName(event) {
+  if (selectedPlayer.value) {
+    store.updateElement(selectedPlayer.value.id, { playerName: event.target.value })
+  }
+}
+
+function updateSelectedPlayerNumber(event) {
+  if (selectedPlayer.value) {
+    store.updateElement(selectedPlayer.value.id, { playerNumber: event.target.value })
+  }
+}
+
 function selectAndStartPlayerDrag(player, event) {
+  playerPopoverId.value = null
   store.selectElement(player.id)
 
   const group = elementNodes.get(player.id)
@@ -107,8 +183,14 @@ function createPlayer(el) {
   const group = new Konva.Group({ draggable: true, listening: true, elementId: el.id })
   const circle = new Konva.Circle()
   const number = new Konva.Text({ listening: false })
-  group.add(circle, number)
+  const name = new Konva.Text({ listening: false })
+  group.add(circle, number, name)
   bindSelection(group, el.id)
+  // Konva no emite click después de un drag, así que el editor solo se abre
+  // cuando la ficha se pulsó sin moverla.
+  group.on('mousedown touchstart', () => {
+    playerPopoverId.value = null
+  })
   group.on('dragend', () => {
     store.updateElement(el.id, { x: group.x(), y: group.y() })
   })
@@ -143,6 +225,17 @@ function updatePlayer(group, el) {
     fill: colors.secondaryColor,
     align: 'center',
     verticalAlign: 'middle',
+    listening: false,
+  })
+  group.getChildren()[2].setAttrs({
+    x: -60,
+    y: 23,
+    width: 120,
+    text: el.playerName || '',
+    fontSize: 13,
+    fontStyle: 'bold',
+    fill: '#ffffff',
+    align: 'center',
     listening: false,
   })
 }
@@ -180,9 +273,9 @@ function drawArrow(ctx, el) {
 function createArrow(el) {
   const group = new Konva.Group()
   const visual = new Konva.Shape({ listening: false })
-  const hitArea = new Konva.Line({ listening: true })
+  const hitArea = new Konva.Shape({ listening: true })
   group.add(visual, hitArea)
-  bindSelection(group, el.id)
+  bindSelection(hitArea, el.id)
   elementGroup.add(group)
   return group
 }
@@ -201,13 +294,31 @@ function updateArrow(group, el) {
     shadowOffset: { x: 0, y: 0 },
   })
   hitArea.setAttrs({
-    points: el.cx == null ? [el.x, el.y, el.x2, el.y2] : [el.x, el.y, el.cx, el.cy, el.x2, el.y2],
-    stroke: 'rgba(0,0,0,0.01)',
-    strokeWidth: 28,
+    hitFunc(ctx, shape) {
+      const controlX = el.cx ?? (el.x + el.x2) / 2
+      const controlY = el.cy ?? (el.y + el.y2) / 2
+      const angle = el.cx == null
+        ? Math.atan2(el.y2 - el.y, el.x2 - el.x)
+        : Math.atan2(el.y2 - controlY, el.x2 - controlX)
+      const headLength = 14
+      const headAngle = Math.PI / 6
+
+      // Konva escribe el color interno del nodo mediante strokeShape/fillShape.
+      ctx.beginPath()
+      ctx.moveTo(el.x, el.y)
+      if (el.cx == null) ctx.lineTo(el.x2, el.y2)
+      else ctx.quadraticCurveTo(controlX, controlY, el.x2, el.y2)
+      ctx.strokeShape(shape)
+
+      ctx.beginPath()
+      ctx.moveTo(el.x2, el.y2)
+      ctx.lineTo(el.x2 - headLength * Math.cos(angle - headAngle), el.y2 - headLength * Math.sin(angle - headAngle))
+      ctx.lineTo(el.x2 - headLength * Math.cos(angle + headAngle), el.y2 - headLength * Math.sin(angle + headAngle))
+      ctx.closePath()
+      ctx.fillShape(shape)
+    },
     hitStrokeWidth: 28,
-    tension: el.cx == null ? 0 : 0.4,
     lineCap: 'round',
-    lineJoin: 'round',
     listening: true,
   })
 }
@@ -332,40 +443,53 @@ function reconcileElements() {
   overlayLayer.batchDraw()
 }
 
+function arrowHandleDefinitions(arrow) {
+  const middleX = arrow.cx ?? (arrow.x + arrow.x2) / 2
+  const middleY = arrow.cy ?? (arrow.y + arrow.y2) / 2
+  return [
+    { x: arrow.x, y: arrow.y, fill: '#4a6cf7', changes: (point) => ({ x: point.x, y: point.y }) },
+    { x: middleX, y: middleY, fill: '#f1c40f', changes: (point) => ({ cx: point.x, cy: point.y }) },
+    { x: arrow.x2, y: arrow.y2, fill: '#e74c3c', changes: (point) => ({ x2: point.x, y2: point.y }) },
+  ]
+}
+
+function startArrowHandleDrag(point) {
+  const arrow = store.selectedElement
+  if (!arrow || arrow.type !== 'arrow') return false
+
+  const handle = arrowHandleDefinitions(arrow).find((item) => Math.hypot(point.x - item.x, point.y - item.y) <= 18)
+  if (!handle) return false
+
+  draggedArrowHandle = { arrowId: arrow.id, changes: handle.changes }
+  return true
+}
+
 function renderArrowHandles() {
   const arrow = store.selectedElement
   if (!arrow || arrow.type !== 'arrow') {
     overlayGroup.destroyChildren()
     handleArrowId = null
     arrowHandles = []
+    draggedArrowHandle = null
     return
   }
 
-  const middleX = arrow.cx ?? (arrow.x + arrow.x2) / 2
-  const middleY = arrow.cy ?? (arrow.y + arrow.y2) / 2
-  const definitions = [
-    { x: arrow.x, y: arrow.y, fill: '#4a6cf7', update: (node) => ({ x: node.x(), y: node.y() }) },
-    { x: middleX, y: middleY, fill: '#f1c40f', update: (node) => ({ cx: node.x(), cy: node.y() }) },
-    { x: arrow.x2, y: arrow.y2, fill: '#e74c3c', update: (node) => ({ x2: node.x(), y2: node.y() }) },
-  ]
+  const definitions = arrowHandleDefinitions(arrow)
 
   if (handleArrowId !== arrow.id) {
     overlayGroup.destroyChildren()
     handleArrowId = arrow.id
     arrowHandles = definitions.map((handle) => {
-      const node = new Konva.Circle({ x: handle.x, y: handle.y, radius: 8, fill: handle.fill, stroke: '#ffffff', strokeWidth: 2, hitStrokeWidth: 12, draggable: true })
-      node.on('dragmove', () => store.updateElement(arrow.id, handle.update(node)))
+      const node = new Konva.Circle({ x: handle.x, y: handle.y, radius: 8, fill: handle.fill, stroke: '#ffffff', strokeWidth: 2, listening: false })
       overlayGroup.add(node)
       return node
     })
     return
   }
 
-  // No se destruye el handle que el usuario está arrastrando: Konva mantiene
-  // su ciclo nativo de drag aun cuando Pinia actualiza la flecha.
   definitions.forEach((handle, index) => {
     const node = arrowHandles[index]
-    if (node && !node.isDragging()) node.position({ x: handle.x, y: handle.y })
+    if (node) node.position({ x: handle.x, y: handle.y })
   })
 }
 
@@ -431,34 +555,36 @@ function finishDrawing() {
 
 function bindStageEvents() {
   stage.on('mousedown touchstart', (event) => {
-    // Los elementos ya seleccionan mediante sus handlers nativos y no inician dibujo.
-    if (elementIdFromNode(event.target) !== null || event.target.getParent() === overlayGroup) return
-
     const position = stage.getPointerPosition()
     if (!position || !scale.value) return
     const point = screenToVirtual(position)
+    const playerAtPointer = findPlayerAt(point)
+    playerPointerDown = playerAtPointer ? { id: playerAtPointer.id, point } : null
+
+    if (startArrowHandleDrag(point)) {
+      playerPointerDown = null
+      event.evt?.preventDefault?.()
+      return
+    }
+
+    // Los elementos ya seleccionan mediante sus handlers nativos y no inician dibujo.
+    if (elementIdFromNode(event.target) !== null || event.target.getParent() === overlayGroup) return
 
     // Evita crear una ficha nueva cuando el hit-test nativo devolvió el Stage
     // pese a que el puntero cayó dentro de una ficha ya existente.
-    const player = findPlayerAt(point)
-    if (player) {
-      selectAndStartPlayerDrag(player, event)
+    if (playerAtPointer) {
+      selectAndStartPlayerDrag(playerAtPointer, event)
+      return
+    }
+
+    // Respaldo cuando el hit canvas de Konva aún no refleja una flecha recién dibujada.
+    const arrow = findArrowAt(point)
+    if (arrow) {
+      store.selectElement(arrow.id)
       return
     }
 
     store.clearSelection()
-
-    if (store.selectedTool === 'player') {
-      store.addElement({
-        type: 'player',
-        x: point.x,
-        y: point.y,
-        teamId: store.activeTeam,
-        playerNumber: store.playerNumber,
-        playerName: store.playerName,
-      })
-      return
-    }
 
     if (store.selectedTool === 'text') {
       store.addElement({ type: 'text', x: point.x, y: point.y, color: store.selectedColor, text: store.playerName || 'Texto', fontSize: store.fontSize })
@@ -473,6 +599,14 @@ function bindStageEvents() {
   })
 
   stage.on('mousemove touchmove', () => {
+    if (draggedArrowHandle) {
+      const position = stage.getPointerPosition()
+      if (!position || !scale.value) return
+      const point = screenToVirtual(position)
+      store.updateElement(draggedArrowHandle.arrowId, draggedArrowHandle.changes(point))
+      return
+    }
+
     if (!isDrawing) return
     const position = stage.getPointerPosition()
     if (!position || !scale.value) return
@@ -480,7 +614,28 @@ function bindStageEvents() {
     updatePreview()
   })
 
-  stage.on('mouseup touchend', finishDrawing)
+  stage.on('mouseup touchend', () => {
+    if (draggedArrowHandle) {
+      draggedArrowHandle = null
+      return
+    }
+
+    if (playerPointerDown) {
+      const position = stage.getPointerPosition()
+      const pointerDown = playerPointerDown
+      playerPointerDown = null
+      if (!position || !scale.value) return
+
+      const point = screenToVirtual(position)
+      if (Math.hypot(point.x - pointerDown.point.x, point.y - pointerDown.point.y) < DRAW_THRESHOLD) {
+        store.selectElement(pointerDown.id)
+        playerPopoverId.value = pointerDown.id
+        return
+      }
+    }
+
+    finishDrawing()
+  })
 }
 
 function drawPitch() {
@@ -519,6 +674,7 @@ function resizeStage() {
 }
 
 function onKeyDown(event) {
+  if (event.target?.matches('input, textarea, select, [contenteditable="true"]')) return
   if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedElementId !== null) {
     store.removeElement(store.selectedElementId)
   } else if (event.key === 'Escape') {
@@ -573,5 +729,31 @@ onUnmounted(() => {
   top: 0;
   left: 0;
   touch-action: none;
+}
+
+.player-popover {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+  width: max-content;
+  padding: 6px;
+  background: #ffffff;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transform: translateX(-50%);
+}
+
+.player-popover input {
+  width: 86px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid #b0b0b0;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.player-popover input:last-child {
+  width: 52px;
 }
 </style>
