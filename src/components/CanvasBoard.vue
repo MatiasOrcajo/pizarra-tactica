@@ -18,6 +18,16 @@
       aria-label="Número del jugador"
       @input="updateSelectedPlayerNumber"
     >
+    <button
+      class="swap-player-button"
+      aria-label="Intercambiar jugador"
+      title="Intercambiar con otro jugador"
+      @click="startSwapMode"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M7 16l-4-4m0 0 4-4m-4 4h18M17 8l4 4m0 0-4 4m4-4H3" />
+      </svg>
+    </button>
   </div>
   <!-- OVERLAY DIBUJO: colores y eliminación del elemento gráfico seleccionado. -->
   <div v-if="selectedDrawing" class="color-popover" :style="colorPopoverStyle">
@@ -121,6 +131,7 @@ let elementGroup = null
 let drawingGroup = null
 let playerGroup = null
 let overlayGroup = null
+let trailGroup = null
 let previewNode = null
 let tacticalZonesGroup = null
 let isDrawing = false
@@ -131,6 +142,7 @@ let editHandles = []
 let draggedHandle = null
 let draggedDrawing = null
 let playerPointerDown = null
+let playerDragStartPos = null
 
 // RECONCILIACION: cada id del store conserva su nodo Konva durante toda su vida.
 const elementNodes = new Map()
@@ -149,6 +161,11 @@ function getPlayerColors(el) {
 /** SELECCION: comprueba si un elemento es el activo en Pinia. */
 function isSelected(el) {
   return store.selectedElementId === el.id
+}
+
+/** MODO INTERCAMBIO: comprueba si un jugador es el origen del intercambio. */
+function isSwapSource(el) {
+  return store.swapModePlayerId !== null && store.swapModePlayerId === el.id
 }
 
 /** HERRAMIENTA LIBRE: permite seleccionar y arrastrar en vez de crear un dibujo. */
@@ -285,6 +302,14 @@ function updateSelectedPlayerNumber(event) {
   }
 }
 
+/** MODO INTERCAMBIO: cierra el popover y activa el modo intercambio en el store. */
+function startSwapMode() {
+  if (!selectedPlayer.value) return
+  const playerId = selectedPlayer.value.id
+  playerPopoverId.value = null
+  store.enterSwapMode(playerId)
+}
+
 /**
  * DRAG JUGADOR: selecciona y arranca el drag nativo cuando el HIT-TEST manual
  * detectó una ficha bajo otro dibujo y Konva entregó el evento al nodo incorrecto.
@@ -368,10 +393,19 @@ function createPlayer(el) {
   })
   group.on('dragstart', () => {
     store.beginHistoryBatch()
+    const current = store.elements.find((e) => e.id === el.id)
+    playerDragStartPos = current ? { x: current.x, y: current.y } : { x: el.x, y: el.y }
   })
   group.on('dragend', () => {
-    store.updateElement(el.id, { x: group.x(), y: group.y() })
+    const startPos = playerDragStartPos
+    const endX = group.x()
+    const endY = group.y()
+    store.updateElement(el.id, { x: endX, y: endY })
     store.endHistoryBatch()
+    if (startPos) {
+      createMoveTrail(startPos, { x: endX, y: endY }, el)
+      playerDragStartPos = null
+    }
   })
   playerGroup.add(group)
   return group
@@ -384,17 +418,22 @@ function createPlayer(el) {
 function updatePlayer(group, el) {
   const colors = getPlayerColors(el)
   const selected = isSelected(el)
+  const swapping = isSwapSource(el)
   // Pinia puede cambiar mientras Konva está en pleno drag. No devolvemos la
   // ficha a la posición anterior hasta que el dragend persista su posición.
   if (!group.isDragging()) group.position({ x: el.x, y: el.y })
-  group.draggable(isFreeTool())
+  group.draggable(isFreeTool() && store.swapModePlayerId === null)
   group.getChildren()[0].setAttrs({
     x: 0,
     y: 0,
     radius: 15,
     fill: colors.primaryColor,
-    stroke: selected ? '#ffffff' : 'rgba(0,0,0,0.35)',
-    strokeWidth: selected ? 3 : 2,
+    stroke: swapping ? '#f1c40f' : selected ? '#ffffff' : 'rgba(0,0,0,0.35)',
+    strokeWidth: swapping ? 4 : selected ? 3 : 2,
+    shadowColor: swapping ? '#f1c40f' : '#000000',
+    shadowBlur: swapping ? 10 : 4,
+    shadowOpacity: swapping ? 0.6 : 0.3,
+    shadowOffset: { x: 1, y: 2 },
     listening: true,
     perfectDrawEnabled: false,
   })
@@ -430,24 +469,53 @@ function updatePlayer(group, el) {
   })
 }
 
-/** RENDER BALON: crea un Telstar inspirado en el balón del Mundial México 1970. */
+/**
+ * RASTRO DE MOVIMIENTO: crea una flecha semitransparente desde la posición
+ * inicial hasta la final, con color contrastante que se desvanece gradualmente
+ * en 3 segundos. Usa Konva.Arrow + tween imperativo sobre la capa overlay.
+ */
+function createMoveTrail(startPos, endPos, playerEl) {
+  const dx = endPos.x - startPos.x
+  const dy = endPos.y - startPos.y
+  // Ignorar movimientos muy pequeños (clics sin arrastre real)
+  if (Math.hypot(dx, dy) < 5) return
+
+  // Color contrastante: amarillo brillante, visible sobre el césped y cualquier equipo
+  const trailColor = '#f1c40f'
+
+  const arrow = new Konva.Arrow({
+    points: [startPos.x, startPos.y, endPos.x, endPos.y],
+    stroke: trailColor,
+    strokeWidth: 4,
+    fill: trailColor,
+    pointerLength: 12,
+    pointerWidth: 10,
+    opacity: 0.5,
+    listening: false,
+    lineCap: 'round',
+    lineJoin: 'round',
+  })
+
+  trailGroup.add(arrow)
+  overlayLayer.batchDraw()
+
+  // Tween de desvanecimiento: opacidad 0.5 → 0 en 3 segundos, luego eliminar nodo
+  arrow.to({
+    opacity: 0,
+    duration: 3,
+    easing: Konva.Easings.EaseOut,
+    onFinish: () => {
+      arrow.destroy()
+      overlayLayer.batchDraw()
+    },
+  })
+}
+
+/** RENDER BALON*/
 function createBall(el) {
   const group = new Konva.Group({ draggable: false, listening: true, elementId: el.id })
   const ball = new Konva.Circle()
-  const centerPatch = new Konva.RegularPolygon({ sides: 5, radius: 4.5, fill: '#171717', rotation: -90, listening: false })
-  const patches = Array.from({ length: 5 }, (_, index) => {
-    const angle = -Math.PI / 2 + index * (Math.PI * 2 / 5)
-    return new Konva.RegularPolygon({
-      x: Math.cos(angle) * 9,
-      y: Math.sin(angle) * 9,
-      sides: 5,
-      radius: 2.8,
-      fill: '#171717',
-      rotation: angle * 180 / Math.PI - 90,
-      listening: false,
-    })
-  })
-  group.add(ball, centerPatch, ...patches)
+  group.add(ball)
   bindSelection(group, el.id)
   playerGroup.add(group)
   return group
@@ -461,7 +529,7 @@ function updateBall(group, el) {
   group.getChildren()[0].setAttrs({
     x: 0,
     y: 0,
-    radius: 14,
+    radius: 10,
     fill: '#ffffff',
     stroke: selected ? '#4a6cf7' : '#1f2937',
     strokeWidth: selected ? 3 : 2,
@@ -906,6 +974,17 @@ function bindStageEvents() {
     const playerAtPointer = findPlayerAt(point)
     playerPointerDown = null
 
+    // MODO INTERCAMBIO: si está activo, resolvemos el intercambio o cancelamos.
+    if (store.swapModePlayerId !== null) {
+      playerPopoverId.value = null
+      if (playerAtPointer) {
+        store.swapPlayers(store.swapModePlayerId, playerAtPointer.id)
+      } else {
+        store.cancelSwapMode()
+      }
+      return
+    }
+
     // Drawing tools own the entire gesture, including gestures that begin over
     // an existing element. This prevents Konva's native node drag from winning.
     if (SHAPE_TOOLS.includes(store.selectedTool)) {
@@ -1151,6 +1230,7 @@ function resizeStage() {
   const transform = { x: offsetX.value, y: offsetY.value, scaleX: scale.value, scaleY: scale.value }
   pitchGroup.setAttrs(transform)
   elementGroup.setAttrs(transform)
+  trailGroup.setAttrs(transform)
   overlayGroup.setAttrs(transform)
   if (tacticalZonesGroup) {
     tacticalZonesGroup.setAttrs(transform)
@@ -1171,7 +1251,11 @@ function onKeyDown(event) {
   } else if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedElementId !== null) {
     store.removeElement(store.selectedElementId)
   } else if (event.key === 'Escape') {
-    store.clearSelection()
+    if (store.swapModePlayerId !== null) {
+      store.cancelSwapMode()
+    } else {
+      store.clearSelection()
+    }
   }
 }
 
@@ -1217,12 +1301,13 @@ onMounted(() => {
   drawingGroup = new Konva.Group()
   playerGroup = new Konva.Group()
   overlayGroup = new Konva.Group()
+  trailGroup = new Konva.Group()
   pitchLayer.add(pitchGroup)
   tacticalZonesGroup = new Konva.Group({ visible: store.showTacticalZones })
   pitchLayer.add(tacticalZonesGroup)
   elementGroup.add(drawingGroup, playerGroup)
   elementLayer.add(elementGroup)
-  overlayLayer.add(overlayGroup)
+  overlayLayer.add(trailGroup, overlayGroup)
   stage.add(backgroundLayer, pitchLayer, elementLayer, overlayLayer)
   drawPitch()
   if (store.showTacticalZones) drawTacticalZones()
@@ -1343,5 +1428,37 @@ onUnmounted(() => {
 /* ESTADO HOVER ELIMINAR: refuerza visualmente la acción destructiva. */
 .delete-drawing-button:hover {
   color: #991b1b;
+}
+
+/* BOTON INTERCAMBIO: dentro del popover de jugador, junto a los campos de texto. */
+.swap-player-button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  margin-left: 2px;
+  border: 1px solid #b0b0b0;
+  border-radius: 4px;
+  background: transparent;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+/* ICONO INTERCAMBIO: trazo SVG que hereda el color del botón. */
+.swap-player-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+/* ESTADO HOVER INTERCAMBIO: refuerza visualmente la acción. */
+.swap-player-button:hover {
+  background: #eff6ff;
+  border-color: #2563eb;
 }
 </style>

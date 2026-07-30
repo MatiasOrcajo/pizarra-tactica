@@ -169,7 +169,7 @@ function generateTeamPlayers(teamId, team, startId = 0) {
 
 /** Crea el balón en el punto central del campo virtual. */
 function createBall(id) {
-  return { id, type: 'ball', x: CENTER_SPOT.x, y: CENTER_SPOT.y }
+  return { id, type: 'ball', x: CENTER_SPOT.x, y: CENTER_SPOT.y, radius: 14 }
 }
 
 /** Configuración por defecto de los equipos */
@@ -239,6 +239,12 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
   /** ID del elemento actualmente seleccionado (null = ninguno) */
   const selectedElementId = ref(null)
+
+  /**
+   * MODO INTERCAMBIO: cuando no es null, el siguiente clic en otro jugador
+   * intercambia su nombre y dorsal con el jugador indicado por este id.
+   */
+  const swapModePlayerId = ref(null)
 
   /** Elemento seleccionado (computado desde elements + selectedElementId) */
   const selectedElement = computed(() => {
@@ -514,6 +520,45 @@ export const usePizarraStore = defineStore('pizarra', () => {
 
   function clearSelection() {
     selectedElementId.value = null
+    swapModePlayerId.value = null
+  }
+
+  /**
+   * Activa el modo intercambio para el jugador indicado.
+   * El siguiente clic en otro jugador ejecutará el intercambio de datos.
+   * @param {number} playerId — id del primer jugador seleccionado
+   */
+  function enterSwapMode(playerId) {
+    swapModePlayerId.value = playerId
+  }
+
+  /** Cancela el modo intercambio sin realizar cambios. */
+  function cancelSwapMode() {
+    swapModePlayerId.value = null
+  }
+
+  /**
+   * Intercambia nombre y dorsal entre dos jugadores.
+   * Mantiene posiciones y equipos intactos; solo intercambia la información
+   * visible de cada ficha (playerName, playerNumber).
+   * @param {number} idA — id del primer jugador (el que inició el intercambio)
+   * @param {number} idB — id del segundo jugador (el objetivo del clic)
+   */
+  function swapPlayers(idA, idB) {
+    if (idA === idB) { swapModePlayerId.value = null; return }
+    const elA = elements.value.find((e) => e.id === idA && e.type === 'player')
+    const elB = elements.value.find((e) => e.id === idB && e.type === 'player')
+    if (!elA || !elB) { swapModePlayerId.value = null; return }
+
+    recordHistory()
+
+    const tmpName = elA.playerName
+    const tmpNumber = elA.playerNumber
+    updateElement(idA, { playerName: elB.playerName, playerNumber: elB.playerNumber })
+    updateElement(idB, { playerName: tmpName, playerNumber: tmpNumber })
+
+    swapModePlayerId.value = null
+    selectedElementId.value = idB
   }
 
   function clearDrawings() {
@@ -756,6 +801,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     elements,
     selectedElementId,
     selectedElement,
+    swapModePlayerId,
     undoStack,
     redoStack,
 
@@ -791,6 +837,11 @@ export const usePizarraStore = defineStore('pizarra', () => {
     redo,
     beginHistoryBatch,
     endHistoryBatch,
+
+    // Intercambio de jugadores
+    enterSwapMode,
+    cancelSwapMode,
+    swapPlayers,
 
     // Equipos
     setTeamName,
