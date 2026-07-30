@@ -7,7 +7,8 @@
         Importar
         <input type="file" accept=".json" @change="handleImport" />
       </label>
-      <button class="action-button danger" @click="restoreFormations">Limpiar todo</button>
+      <button class="action-button danger" @click="clearDrawings">Limpiar todo</button>
+      <button class="action-button" @click="restoreFormations">Reestablecer tácticas</button>
     </section>
 
     <section class="section">
@@ -45,8 +46,14 @@ function handleImport(event) {
   event.target.value = ''
 }
 
+function clearDrawings() {
+  if (confirm('Se eliminarán todas las anotaciones dibujadas.')) {
+    store.clearDrawings()
+  }
+}
+
 function restoreFormations() {
-  if (confirm('Se eliminarán todas las anotaciones y se restaurarán las formaciones seleccionadas.')) {
+  if (confirm('Se eliminarán las anotaciones y se reestablecerán las formaciones de ambos equipos.')) {
     store.resetToSelectedFormations()
   }
 }

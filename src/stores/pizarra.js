@@ -307,8 +307,9 @@ export const usePizarraStore = defineStore('pizarra', () => {
     selectedElementId.value = null
   }
 
-  function clearAll() {
-    elements.value = []
+  function clearDrawings() {
+    elements.value = elements.value.filter((el) => el.type === 'player')
+    selectedElementId.value = null
   }
 
   /**
@@ -487,7 +488,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     removeElement,
     selectElement,
     clearSelection,
-    clearAll,
+    clearDrawings,
     resetToDefaults,
     resetToSelectedFormations,
 
