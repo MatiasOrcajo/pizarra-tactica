@@ -273,15 +273,68 @@ export const usePizarraStore = defineStore('pizarra', () => {
   }
 
   // ======================
+  // ESPEJO HORIZONTAL
+  // ======================
+
+  /** Bandera que indica si la cancha está reflejada horizontalmente (equipos cambiados de lado). */
+  const mirrorHorizontal = ref(saved?.mirrorHorizontal ?? false)
+
+  /**
+   * Rotación 180° de todos los elementos respecto al centro del campo (525, 340),
+   * simulando el cambio de lado real del fútbol. Intercambia teamId de jugadores
+   * y nombres/colores/formaciones de equipos para mantener la coherencia visual.
+   */
+  function toggleMirrorHorizontal() {
+    recordHistory()
+
+    const virtualW = 1050
+    const virtualH = 680
+
+    // Rotar 180°: invertir X e Y de todos los elementos e intercambiar teamId de jugadores
+    elements.value = elements.value.map((el) => {
+      const mirrored = { ...el }
+      mirrored.x = virtualW - el.x
+      mirrored.y = virtualH - el.y
+      if (el.x2 != null) mirrored.x2 = virtualW - el.x2
+      if (el.y2 != null) mirrored.y2 = virtualH - el.y2
+      if (el.cx != null) mirrored.cx = virtualW - el.cx
+      if (el.cy != null) mirrored.cy = virtualH - el.cy
+      if (el.type === 'player') {
+        mirrored.teamId = el.teamId === 1 ? 2 : 1
+      }
+      return mirrored
+    })
+
+    // Intercambiar configuración completa de equipos (nombres, colores y formaciones)
+    const tempName = teams.team1.name
+    const tempPrimary = teams.team1.primaryColor
+    const tempSecondary = teams.team1.secondaryColor
+    const tempFormation = teams.team1.formation
+    teams.team1.name = teams.team2.name
+    teams.team1.primaryColor = teams.team2.primaryColor
+    teams.team1.secondaryColor = teams.team2.secondaryColor
+    teams.team1.formation = teams.team2.formation
+    teams.team2.name = tempName
+    teams.team2.primaryColor = tempPrimary
+    teams.team2.secondaryColor = tempSecondary
+    teams.team2.formation = tempFormation
+
+    syncLineColors()
+
+    mirrorHorizontal.value = !mirrorHorizontal.value
+  }
+
+  // ======================
   // AUTOGUARDADO
   // ======================
 
   watch(
-    [elements, teams],
+    [elements, teams, mirrorHorizontal],
     () => {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         elements: elements.value,
         teams: { ...teams },
+        mirrorHorizontal: mirrorHorizontal.value,
       }))
     },
     { deep: true }
@@ -306,6 +359,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
       elements: elements.value,
       teams: { ...teams },
       nextId,
+      mirrorHorizontal: mirrorHorizontal.value,
     }))
   }
 
@@ -334,6 +388,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
     Object.assign(teams.team1, snapshot.teams.team1)
     Object.assign(teams.team2, snapshot.teams.team2)
     nextId = snapshot.nextId
+    mirrorHorizontal.value = snapshot.mirrorHorizontal ?? false
     selectedElementId.value = null
   }
 
@@ -474,6 +529,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
    */
   function resetToDefaults() {
     recordHistory()
+    mirrorHorizontal.value = false
     nextId = 0
     const def = defaultTeams()
     Object.assign(teams.team1, def.team1)
@@ -487,18 +543,53 @@ export const usePizarraStore = defineStore('pizarra', () => {
   }
 
   /**
-   * Elimina anotaciones y devuelve ambos equipos a las formaciones elegidas
-   * actualmente, sin modificar sus nombres ni colores.
+   * Restaura las posiciones de jugadores a las formaciones elegidas
+   * actualmente, sin modificar nombres ni colores de equipo.
+   *
+   * @param {boolean} clearAll — si es true, también elimina todas las
+   *   anotaciones dibujadas (flechas, zonas, líneas, texto, etc.).
+   *   Si es false, solo reposiciona jugadores y balón.
    */
-  function resetToSelectedFormations() {
-    recordHistory()
-    nextId = 0
-    const team1Players = generateTeamPlayers(1, teams.team1, nextId)
-    nextId += team1Players.length
-    const team2Players = generateTeamPlayers(2, teams.team2, nextId)
-    nextId += team2Players.length
-    elements.value = [...team1Players, ...team2Players, createBall(nextId++)]
-    selectedElementId.value = null
+  function resetToSelectedFormations(clearAll = false) {
+    if (clearAll) {
+      recordHistory()
+      nextId = 0
+      const team1Players = generateTeamPlayers(1, teams.team1, nextId)
+      nextId += team1Players.length
+      const team2Players = generateTeamPlayers(2, teams.team2, nextId)
+      nextId += team2Players.length
+      elements.value = [...team1Players, ...team2Players, createBall(nextId++)]
+      selectedElementId.value = null
+    } else {
+      beginHistoryBatch()
+      // Reposicionar jugadores de ambos equipos a sus formaciones actuales
+      ;[1, 2].forEach((teamId) => {
+        const key = teamId === 1 ? 'team1' : 'team2'
+        const positions = FORMATIONS[teams[key].formation] || FORMATIONS['4-4-2']
+        const teamPlayers = elements.value
+          .filter((el) => el.type === 'player' && el.teamId === teamId)
+          .sort((a, b) => a.id - b.id)
+          .slice(0, 11)
+
+        teamPlayers.forEach((player, i) => {
+          const pos = positions[i] || positions[0]
+          const position = positionForTeam(pos, teamId)
+          updateElement(player.id, {
+            x: position.x,
+            y: position.y,
+          })
+        })
+      })
+
+      // Resetear posición del balón al centro si existe
+      const ball = elements.value.find((el) => el.type === 'ball')
+      if (ball) {
+        updateElement(ball.id, { x: CENTER_SPOT.x, y: CENTER_SPOT.y })
+      }
+
+      selectedElementId.value = null
+      endHistoryBatch()
+    }
   }
 
   // ======================
@@ -604,6 +695,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
       exportedAt: new Date().toISOString(),
       elements: elements.value,
       teams: { ...teams },
+      mirrorHorizontal: mirrorHorizontal.value,
     }
     const json = JSON.stringify(data, null, 2)
     const blob = new Blob([json], { type: 'application/json' })
@@ -629,6 +721,7 @@ export const usePizarraStore = defineStore('pizarra', () => {
       if (data.teams.team1) Object.assign(teams.team1, data.teams.team1)
       if (data.teams.team2) Object.assign(teams.team2, data.teams.team2)
     }
+    mirrorHorizontal.value = data.mirrorHorizontal ?? false
     syncLineColors()
   }
 
@@ -660,6 +753,10 @@ export const usePizarraStore = defineStore('pizarra', () => {
     // Zonas tácticas
     showTacticalZones,
     toggleTacticalZones,
+
+    // Espejo horizontal
+    mirrorHorizontal,
+    toggleMirrorHorizontal,
 
     // CRUD
     addElement,

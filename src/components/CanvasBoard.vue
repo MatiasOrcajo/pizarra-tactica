@@ -396,12 +396,14 @@ function updatePlayer(group, el) {
     listening: true,
     perfectDrawEnabled: false,
   })
+  const numText = String(el.playerNumber)
+  const numWidth = Math.max(20, numText.length * 16)
   group.getChildren()[1].setAttrs({
-    x: -10,
+    x: -numWidth / 2,
     y: -10,
-    width: 20,
+    width: numWidth,
     height: 20,
-    text: String(el.playerNumber),
+    text: numText,
     fontSize: 25,
     fontStyle: 'bold',
     fill: colors.secondaryColor,

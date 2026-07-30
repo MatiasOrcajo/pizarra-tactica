@@ -13,6 +13,16 @@
         :class="['action-button', { active: store.showTacticalZones }]"
         @click="store.toggleTacticalZones()"
       >Zonas tácticas</button>
+      <label
+        :class="['action-button', 'mirror-toggle', { active: store.mirrorHorizontal }]"
+      >
+        <input
+          type="checkbox"
+          :checked="store.mirrorHorizontal"
+          @change="store.toggleMirrorHorizontal()"
+        />
+        Espejo horizontal
+      </label>
     </section>
 
     <section class="section">
@@ -59,9 +69,8 @@ function clearDrawings() {
 }
 
 function restoreFormations() {
-  if (confirm('Se eliminarán las anotaciones y se reestablecerán las formaciones de ambos equipos.')) {
-    store.resetToSelectedFormations()
-  }
+  const clearAll = confirm('¿Desea también borrar todos los dibujos del lienzo?')
+  store.resetToSelectedFormations(clearAll)
 }
 </script>
 
@@ -160,6 +169,21 @@ h2 {
   border-color: #4a6cf7;
   background: #4a6cf7;
   color: #fff;
+}
+
+.mirror-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.mirror-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #4a6cf7;
 }
 
 @media (max-width: 760px) {
